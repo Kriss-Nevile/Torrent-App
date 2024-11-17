@@ -17,6 +17,12 @@ import asyncio
 import os
 import hashlib
 
+
+# Import Configuration
+
+from config import PEICE_SIZE, OUTPUT_DIR, TRACKER_URL
+
+
 #currently the implementation doesnt drop any connections, and will simply stop when it reaches the maimum number of peers
 
 #The handshake process, if the recipient receive a hash info that it currently does not serve
@@ -46,10 +52,9 @@ import hashlib
 
 # Currently the peer supports up to 20 neighbouring peers
 
-PEICE_SIZE = 512 * 1024 #B
 
 class File:
-    def __init__(self, filepath, pieces_list, output_directory = 'Download'):
+    def __init__(self, filepath, pieces_list, output_directory = OUTPUT_DIR):
         self. filepath = filepath
         self.pieces_list = pieces_list 
         '''
@@ -79,7 +84,7 @@ class File:
 
 class Peer:
 
-    def __init__(self, port):
+    def __init__(self, port, torrent_file=""):
         self.max_peer_number = 20
         self.counter_lock = Lock()
         self.current_peer_number = 0
@@ -114,8 +119,11 @@ class Peer:
         self.local_storage = []
 
         # Torrent data:
-        self.piece_length = PEICE_SIZE # default
-        self.URL = 'https://simple-like-torrent-application.vercel.app/' # default
+        self.piece_length = PEICE_SIZE  # default
+        self.URL = TRACKER_URL             # default
+
+        if torrent_file != "":
+            self.Read_Torrent(torrent_file)
         '''
         Sample torrent_data:
         {
@@ -773,7 +781,17 @@ class Peer:
         #         print(f"ERROR: No peers found from the tracker.")
 
 
+# A sample usage
+if __name__ == "__main__": 
+    # port = input('port ')    
+    # a.Main()
 
-port = input('port ')    
-a = Peer(int(port))
-a.Main()
+    torrent_filepath = 'torrents/data.torrent.json'
+    # torrent_filepath = 'torrents/Assignment 1-Network Application P2P File Sharing.pdf.torrent.json'
+    peer = Peer(1234, torrent_filepath)
+
+    print(vars(peer))
+    for file in peer.local_storage:
+        download_folder = os.path.join(file.output_directory, file.filepath)
+        print(f'Save file(s) to: {download_folder}')
+        print(f'Number of peices: {len(file.pieces_list)}')

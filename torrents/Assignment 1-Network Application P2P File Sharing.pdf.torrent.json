@@ -1,0 +1,21 @@
+{
+   "tracker": "https://simple-like-torrent-application.vercel.app/",
+   "info": {
+      "name": "Assignment 1-Network Application P2P File Sharing.pdf",
+      "piece length": 524288,
+      "files": [
+         {
+            "length": 152449,
+            "path": [
+               "Assignment 1-Network Application P2P File Sharing.pdf"
+            ],
+            "pieces": [
+               {
+                  "index": 0,
+                  "hash": "8664b465fb20620c7e29fde5cb1f0f58de3760b4"
+               }
+            ]
+         }
+      ]
+   }
+}
