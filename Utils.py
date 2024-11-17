@@ -22,7 +22,7 @@ class Neighbour_Peer:
         self.ID = ID
         self.send_status = State.am_choking #start condition
         self.receive_status = State.peer_choking #start condition
-        self.available_chunks = [1]
+        self.available_chunks = [] # payload: {"filepath": path/name, "piece_index": }
         self.request_queue = []  #maximum 5 pending requests
         self.is_alive = True  #a non alive neighbour peer would be removed from the peer list 
         self.last_message_time = time.time()
