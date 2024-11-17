@@ -55,7 +55,7 @@ from config import PEICE_SIZE, OUTPUT_DIR, TRACKER_URL
 
 class File:
     def __init__(self, filepath, pieces_list, output_directory = OUTPUT_DIR):
-        self. filepath = filepath
+        self.filepath = filepath
         self.pieces_list = pieces_list 
         '''
             [
@@ -71,7 +71,7 @@ class File:
     def is_complete(self):
         return all(piece_data is not None for piece_data in self.verified_pieces_data)
 
-    def write_file_to_local(self, output_directory):
+    def write_full_file_to_local(self, output_directory):
         local_file_path = os.path.join(output_directory, self.filepath)
         os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
 
@@ -210,15 +210,27 @@ class Peer:
 
                                 filepath = request['filepath']
                                 piece_index = request['piece_index']
+                                chunk_data = None
 
-                                # Read chunk data from filepath with piece_index in request
-                                # Calculate byte range
-                                chunk_data = self.read_chunk(filepath, piece_index)
+                                # Check if the chunk is in local storage
+                                file_obj = next((f for f in self.local_storage if f.filepath == filepath), None)
+                                if file_obj:
+                                    if 0 <= piece_index < len(file_obj.verified_pieces_data):
+                                        chunk_data = file_obj.verified_pieces_data[piece_index]
+                                        if chunk_data is None:
+                                            print(f"INFO: Chunk for file '{filepath}', index {piece_index} not yet verified in local storage from {peer_obj.ID}")
+                                    else:
+                                        print(f"ERROR: Invalid piece index {piece_index} for file '{filepath}' in local storage.")
+                                else:
+                                    print(f"INFO: File '{filepath}' not found in local storage. Reading directly from file.")
 
+                                # If not found or verified in local storage, read directly from file
                                 if chunk_data is None:
-                                    print(f"ERROR: Failed to read chunk data for {filepath} at index {piece_index}")
-                                    continue
-
+                                    chunk_data = self.read_chunk(filepath, piece_index)
+                                    if chunk_data is None:
+                                        print(f"ERROR: Failed to read chunk data for file '{filepath}', index {piece_index}.")
+                                        continue
+                                
                                 # Create and send data to source peer
                                 # Format of send data message:  {"filepath": path/name, "piece_index": , "chunk_data": binary-data}
                                 piece_message = messParser.construct_piece(filepath, piece_index, chunk_data)
@@ -500,7 +512,7 @@ class Peer:
                 
                 # If all pieces are verified, write out the file
                 if file.is_complete():
-                    file.write_file_to_local(self.output_directory)
+                    file.write_full_file_to_local(self.output_directory)
                     print(f"INFO - All pieces for file '{file.filepath}' are verified. File written to output.")
             else:
                 print(f"ERRO: Hash mismatch for piece {piece_index} of file '{file.filepath}'.")
@@ -601,7 +613,7 @@ class Peer:
 
 
 
-    def Connect_torrent(self, URL):
+    def Connect_torrent(self):
         try:
             self.peer_id = datetime.now().strftime("%H%M%S%f") + str(random.randint(10000000, 99999999))  # Generate a unique peer ID
             params = {
@@ -625,6 +637,31 @@ class Peer:
 
         except Exception as e:
             print('Error connecting to the server', e)
+
+
+    # Announce the peer's status to the tracker
+    def announce_to_tracker(self, ip, event=None):
+        """
+        :param event: The event type ('started', 'completed', 'stopped') or None.
+        """
+        try:
+            params = {
+                "info_hash": self.info_hash,
+                "ip": ip,
+                "peer_id": self.peer_id,
+                "port": self.port,
+                "uploaded": self.uploaded,
+                "downloaded": self.downloaded,
+                "left": self.left,
+                "event": event
+            }
+            response = requests.get(self.URL, params=params)
+            if response.status_code == 200:
+                print(f"INFO: Successfully announced to tracker with event '{event}'.")
+            else:
+                print(f"ERROR: Failed to announce to tracker with event '{event}', HTTP {response.status_code}.")
+        except Exception as e:
+            print(f"ERROR: Exception during tracker announcement: {e}")
 
 
     def parse_tracker_response(self, response):
@@ -656,6 +693,56 @@ class Peer:
 
 
 
+
+    # Save all files in local storage to binary files, preserving the directory structure.
+    def save_local_storage(self):
+        for file_obj in self.local_storage:
+            try:
+                # Construct the full file path
+                file_path = os.path.join(file_obj.output_directory, file_obj.filepath)
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+                # Save each chunk separately
+                for i, chunk_data in enumerate(file_obj.verified_pieces_data):
+                    if chunk_data is not None:
+                        piece_path = file_path + f'_{i}'
+                        with open(piece_path, 'wb') as out_file:
+                            out_file.write(chunk_data)
+                        file_obj.verified_pieces_data[i] = None
+                        print(f"INFO: Chunk {i} of file '{file_obj.filepath}' saved to '{piece_path}'.")
+                    # else:
+                    #     print(f"WARNING: Chunk {i} of file '{file_obj.filepath}' is missing. Skipping.")
+                    
+                print(f"INFO: File '{file_obj.filepath}' saved to '{file_obj.output_directory}'.")
+            except Exception as e:
+                print(f"ERROR: Failed to save file '{file_obj.filepath}': {e}")
+
+
+    # Load all binary chunk files into local storage and remove the chunk files afterward.
+    def load_local_storage(self):
+        for file_obj in self.local_storage:
+            try:
+                # Construct the base file path
+                file_path = os.path.join(file_obj.output_directory, file_obj.filepath)
+
+                # Load chunks from saved files
+                for i in range(len(file_obj.pieces_list)):
+                    piece_path = file_path + f'_{i}'
+                    if os.path.exists(piece_path):
+                        with open(piece_path, 'rb') as chunk_file:
+                            file_obj.verified_pieces_data[i] = chunk_file.read()
+                        os.remove(piece_path)  # Remove the chunk file after loading
+                        print(f"INFO: Loaded chunk {i} of file '{file_obj.filepath}' from '{piece_path}'.")
+                    # else:
+                    #     print(f"WARNING: Chunk file '{piece_path}' not found. Assuming missing chunk.")
+                    
+                # Check if all pieces are now verified
+                if file_obj.is_complete():
+                    print(f"INFO: File '{file_obj.filepath}' is fully loaded and complete.")
+                else:
+                    print(f"INFO: File '{file_obj.filepath}' loaded but still incomplete.")
+            except Exception as e:
+                print(f"ERROR: Failed to load file '{file_obj.filepath}': {e}")
 
 
     # Before connecting peers must perform a handshake protocol
@@ -792,6 +879,20 @@ if __name__ == "__main__":
 
     print(vars(peer))
     for file in peer.local_storage:
+        with open('example_BIN', 'rb') as f:
+            chunk_data = f.read()
+
+        file.verified_pieces_data[0] = chunk_data
         download_folder = os.path.join(file.output_directory, file.filepath)
         print(f'Save file(s) to: {download_folder}')
         print(f'Number of peices: {len(file.pieces_list)}')
+    
+    print("\n------ STOP TO DOWNLOAD ------")
+    peer.save_local_storage()
+
+    print("\n------ CONTINUE TO DOWNLOAD ------")
+    peer.load_local_storage()
+    
+    print("\n------ LIST OF CHUNK_DATA ------")
+    for file in peer.local_storage:
+        print(f"File: {file.filepath}\n{file.verified_pieces_data[0]}\n\n")
