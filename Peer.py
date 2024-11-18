@@ -850,67 +850,57 @@ class Peer:
         pass
 
     
-        # message = input('server or client ')
-        # if message == 'server1':
-        #     # Assign downloaded chunks for server1
-        #     self.chunks_downloaded = [{'filepath': 'server1_file', 'piece_index': i} for i in range(768)]
-        #     print(f"INFO: Server1 initialized with {len(self.chunks_downloaded)} pieces.")
-        #     self.Accepting_request()
-        # elif message == 'server2':
-        #     # Assign downloaded chunks for server2
-        #     self.chunks_downloaded = [{'filepath': 'server2_file', 'piece_index': i} for i in range(689, 1575)]
-        #     print(f"INFO: Server2 initialized with {len(self.chunks_downloaded)} pieces.")
-        #     self.Accepting_request()
-        # elif message == 'server3':
-        #     # Assign downloaded chunks for server3
-        #     self.chunks_downloaded = [{'filepath': 'server3_file', 'piece_index': i} for i in range(1450, 2000)]
-        #     print(f"INFO: Server3 initialized with {len(self.chunks_downloaded)} pieces.")
-        #     self.Accepting_request()
-        # elif message == 'client':
-        #     # Initialize client with empty downloaded chunks and full chunk list
-        #     self.downloaded = 0
-        #     self.left = 2000
-        #     self.chunks_left = [{'filepath': 'shared_file', 'piece_index': i} for i in range(2000)]
-        #     self.chunks_downloaded = []
-        #     print(f"INFO: Client initialized with {len(self.chunks_left)} remaining chunks.")
+        message = input('server or client ')
+        if message == 'server1':
+            # Assign downloaded chunks for server1
+            self.chunks_downloaded = [{'filepath': 'Assignment 1-Network Application P2P File Sharing.pdf', 'piece_index': 0}]
+            print(f"INFO: Server1 initialized with {len(self.chunks_downloaded)} pieces.")
+            self.Accepting_request()
+        elif message == 'client':
+            # Initialize client with empty downloaded chunks and full chunk list
+            self.downloaded = 0
+            self.left = 1
+            self.chunks_left = [{'filepath': 'Assignment 1-Network Application P2P File Sharing.pdf', 'piece_index': 0}]
+            self.chunks_downloaded = []
+            print(f"INFO: Client initialized with {len(self.chunks_left)} remaining chunks.")
 
-        #     # Connect to the tracker and peers
-        #     print(f"INFO: Connecting to tracker at {self.URL}...")
-        #     self.Connect_torrent(self.URL)
+            # Connect to the tracker and peers
+            print(f"INFO: Connecting to tracker at {self.URL}...")
+            self.Connect_torrent(self.URL)
 
-        #     # Connect to peers if the peer list is populated
-        #     if self.peer_list:
-        #         print(f"INFO: Connecting to peers from the tracker...")
-        #         self.connect_to_peers()
-        #     else:
-        #         print(f"ERROR: No peers found from the tracker.")
+            # Connect to peers if the peer list is populated
+            if self.peer_list:
+                print(f"INFO: Connecting to peers from the tracker...")
+                self.connect_to_peers()
+            else:
+                print(f"ERROR: No peers found from the tracker.")
 
 
 # A sample usage
-if __name__ == "__main__": 
-    # port = input('port ')    
-    # a.Main()
+# if __name__ == "__main__": 
+#     # port = input('port ')    
+#     # a.Main()
 
-    torrent_filepath = 'torrents/data.torrent.json'
-    # torrent_filepath = 'torrents/Assignment 1-Network Application P2P File Sharing.pdf.torrent.json'
-    peer = Peer(1234, torrent_filepath)
+#     torrent_filepath = 'torrents/data.torrent.json'
+#     # torrent_filepath = 'torrents/Assignment 1-Network Application P2P File Sharing.pdf.torrent.json'
+#     peer = Peer(1234, torrent_filepath)
 
-    print(vars(peer))
-    for file in peer.local_storage:
-        with open('example_BIN', 'rb') as f:
-            chunk_data = f.read()
+#     print(vars(peer))
+#     for file in peer.local_storage:
+#         with open('example_BIN', 'rb') as f:
+#             chunk_data = f.read()
 
-        file.verified_pieces_data[0] = chunk_data
-        download_folder = os.path.join(file.output_directory, file.filepath)
-        print(f'Save file(s) to: {download_folder}')
-        print(f'Number of peices: {len(file.pieces_list)}')
+#         file.verified_pieces_data[0] = chunk_data
+#         download_folder = os.path.join(file.output_directory, file.filepath)
+#         print(f'Save file(s) to: {download_folder}')
+#         print(f'Number of peices: {len(file.pieces_list)}')
     
-    print("\n------ STOP TO DOWNLOAD ------")
-    peer.save_local_storage()
+#     print("\n------ STOP TO DOWNLOAD ------")
+#     peer.save_local_storage()
 
-    print("\n------ CONTINUE TO DOWNLOAD ------")
-    peer.load_local_storage()
+#     print("\n------ CONTINUE TO DOWNLOAD ------")
+#     peer.load_local_storage()
     
-    print("\n------ LIST OF CHUNK_DATA ------")
-    for file in peer.local_storage:
-        print(f"File: {file.filepath}\n{file.verified_pieces_data[0]}\n\n")
+#     print("\n------ LIST OF CHUNK_DATA ------")
+#     for file in peer.local_storage:
+#         print(f"File: {file.filepath}\n{file.verified_pieces_data[0]}\n\n")
