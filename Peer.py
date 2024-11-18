@@ -84,7 +84,8 @@ class File:
 
 class Peer:
 
-    def __init__(self, port, torrent_file=""):
+    def __init__(self, port, torrent_file="", seeder=False):
+        self.seeder = seeder
         self.max_peer_number = 20
         self.counter_lock = Lock()
         self.current_peer_number = 0
@@ -165,11 +166,11 @@ class Peer:
 
                 with self.general_update_lock:
                     if not peer_obj.noted and self.left == 0:
-                        print('send track', peer_obj.send_track)
                         not_interested_message = messParser.construct_not_interested()
                         self.send_all(peer_socket, not_interested_message)
                         peer_obj.noted = True
                         peer_obj.update_time()
+                        print("SEND: Sent not-interested message")
                 
                 with self.general_update_lock:
                     with peer_obj.receive_lock:
@@ -204,9 +205,9 @@ class Peer:
                         for request in reversed(peer_obj.request_queue):
                             try:
                                 # Validate request structure
-                                if 'filepath' not in request or 'piece_index' not in request:
-                                    print(f"ERROR: Invalid request format: {request}")
-                                    continue
+                                # if 'filepath' not in request or 'piece_index' not in request:
+                                #     print(f"ERROR: Invalid request format: {request}")
+                                #     continue
 
                                 filepath = request['filepath']
                                 piece_index = request['piece_index']
@@ -242,24 +243,24 @@ class Peer:
                             except Exception as e:
                                 print(f"ERROR: Exception while processing request {request}: {e}")
 
-                else:
-                    # Send have message for a random piece
-                    if peer_obj.available_chunks:
-                        # Each payload in available_chunks has the format: {"filepath": path/name, "piece_index": }
-                        payload = random.choice(peer_obj.available_chunks)
+                # else:
+                #     # Send have message for a random piece
+                #     if peer_obj.available_chunks:
+                #         # Each payload in available_chunks has the format: {"filepath": path/name, "piece_index": }
+                #         payload = random.choice(peer_obj.available_chunks)
 
-                        have_message = messParser.construct_have(payload['filepath'], payload['piece_index'])
-                        self.send_all(peer_socket, have_message)
-                        print(f"SEND: Sent have message for file {payload['filepath']}, index {payload['piece_index']}")
+                #         have_message = messParser.construct_have(payload['filepath'], payload['piece_index'])
+                #         self.send_all(peer_socket, have_message)
+                #         print(f"SEND: Sent have message for file {payload['filepath']}, index {payload['piece_index']}")
 
-                        peer_obj.last_message_time = time.time()
-                    else:
-                        # Send not interested message if no pieces are available
-                        not_interested_message = messParser.construct_not_interested()
-                        self.send_all(peer_socket, not_interested_message)
-                        print("SEND: Sent not interested message")
-                        peer_obj.last_message_time = time.time()
-                        break
+                #         peer_obj.last_message_time = time.time()
+                #     else:
+                #         # Send not interested message if no pieces are available
+                #         not_interested_message = messParser.construct_not_interested()
+                #         self.send_all(peer_socket, not_interested_message)
+                #         print("SEND: Sent not interested message")
+                #         peer_obj.last_message_time = time.time()
+                #         break
 
                 time.sleep(1)  # Sleep to avoid busy waiting
 
@@ -268,7 +269,8 @@ class Peer:
                     peer_obj.is_alive = False
                 print(f"Error sending message: {e}")
                 break
-
+        
+        print("Send state", peer_obj.send_status, "Receive state", peer_obj.receive_status)
         print("SEND: Send closed for peer with ID:", peer_obj.ID, '\n')
 
 
@@ -412,7 +414,7 @@ class Peer:
     
     def Accepting_request(self):
         accept_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        accept_socket.bind(('localhost', self.port))
+        accept_socket.bind(('', self.port))
         accept_socket.listen(20)
 
         self.primary_accept_socket = accept_socket
@@ -439,46 +441,74 @@ class Peer:
 
     #Function to read a torrent file and initilaizes the variable
     def Read_Torrent(self, torrent_file):
-        try:
-            with open(torrent_file, "r") as file:
-                torrent_data = json.load(file)
-
-                self.piece_length = torrent_data["info"]["piece length"]
-                self.URL = torrent_data["tracker"]
-
-                # Extract the base folder or file name
-                base_name = torrent_data['info']['name']
-
-                if len(torrent_data['info']['files']) == 1 and base_name == torrent_data['info']['files'][0]['path'][0]:
-                    # Single-file torrent
-                    file_info = torrent_data["info"]["files"][0]
-                    filepath = base_name
-                    pieces = file_info["pieces"]
-                    self.add_file(filepath, pieces)                         # Add file to the client's local temp storage
-                    
-                    # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
-                    for piece in pieces:
-                        if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
-                            self.chunks_left.append({"filepath": filepath, "piece_index": piece["index"]})
-                else:
-                    # Multi-file torrent (folder with files)
-                    for file_info in torrent_data["info"]["files"]:
-                        filepath = os.path.join(base_name, *file_info["path"])
+        if self.seeder:
+            try:
+                with open(torrent_file, "r") as file:
+                    torrent_data = json.load(file)
+                    if len(torrent_data['info']['files']) == 1 and base_name == torrent_data['info']['files'][0]['path'][0]:
+                        # Single-file torrent
+                        file_info = torrent_data["info"]["files"][0]
+                        filepath = base_name
                         pieces = file_info["pieces"]
-                        self.add_file(filepath, pieces)     # Add file to the client's local temp storage
+                        
+                        # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
+                        for piece in pieces:
+                            if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
+                                self.chunks_downloaded.append({"filepath": filepath, "piece_index": piece["index"]})
+                    else:
+                        # Multi-file torrent (folder with files)
+                        for file_info in torrent_data["info"]["files"]:
+                            filepath = os.path.join(base_name, *file_info["path"])
+                            pieces = file_info["pieces"]
 
+                            # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
+                            for piece in pieces:
+                                if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
+                                    self.chunks_downloaded.append({"filepath": filepath, "piece_index": piece["index"]})
+            except Exception as e:
+                print(f"ERRROR: Seeder failed to load torrent file: {e}")
+                return False
+        else:
+            try:
+                with open(torrent_file, "r") as file:
+                    torrent_data = json.load(file)
+
+                    self.piece_length = torrent_data["info"]["piece length"]
+                    self.URL = torrent_data["tracker"]
+
+                    # Extract the base folder or file name
+                    base_name = torrent_data['info']['name']
+
+                    if len(torrent_data['info']['files']) == 1 and base_name == torrent_data['info']['files'][0]['path'][0]:
+                        # Single-file torrent
+                        file_info = torrent_data["info"]["files"][0]
+                        filepath = base_name
+                        pieces = file_info["pieces"]
+                        self.add_file(filepath, pieces)                         # Add file to the client's local temp storage
+                        
                         # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
                         for piece in pieces:
                             if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
                                 self.chunks_left.append({"filepath": filepath, "piece_index": piece["index"]})
-                
-                self.left = len(self.chunks_left)
-                print(f"INFO: Total chunks to download: {self.left}.")
-                return True
+                    else:
+                        # Multi-file torrent (folder with files)
+                        for file_info in torrent_data["info"]["files"]:
+                            filepath = os.path.join(base_name, *file_info["path"])
+                            pieces = file_info["pieces"]
+                            self.add_file(filepath, pieces)     # Add file to the client's local temp storage
 
-        except Exception as e:
-            print(f"ERRRO: Failed to load torrent file: {e}")
-            return False
+                            # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
+                            for piece in pieces:
+                                if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
+                                    self.chunks_left.append({"filepath": filepath, "piece_index": piece["index"]})
+                    
+                    self.left = len(self.chunks_left)
+                    print(f"INFO: Total chunks to download: {self.left}.")
+                    return True
+
+            except Exception as e:
+                print(f"ERRROR: Failed to load torrent file: {e}")
+                return False
 
 
 
@@ -534,7 +564,7 @@ class Peer:
                 
                 # If all pieces are verified, write out the file
                 if file.is_complete():
-                    file.write_full_file_to_local(self.output_directory)
+                    file.write_full_file_to_local(file.output_directory)
                     print(f"INFO - All pieces for file '{file.filepath}' are verified. File written to output.")
             else:
                 print(f"ERRO: Hash mismatch for piece {piece_index} of file '{file.filepath}'.")
@@ -888,15 +918,17 @@ class Peer:
         message = input('server or client ')
         if message == 'server1':
             # Assign downloaded chunks for server1
-            self.chunks_downloaded = [{'filepath': 'Assignment 1-Network Application P2P File Sharing.pdf', 'piece_index': 0}]
+            # self.chunks_downloaded = [{'filepath': 'Assignment 1-Network Application P2P File Sharing.pdf', 'piece_index': 0}]
+
             print(f"INFO: Server1 initialized with {len(self.chunks_downloaded)} pieces.")
             self.Accepting_request()
         elif message == 'client':
             # Initialize client with empty downloaded chunks and full chunk list
             self.downloaded = 0
-            self.left = 1
-            self.chunks_left = [{'filepath': 'Assignment 1-Network Application P2P File Sharing.pdf', 'piece_index': 0}]
-            self.chunks_downloaded = []
+            # self.left = 1
+            # self.chunks_left = [{'filepath': 'Assignment 1-Network Application P2P File Sharing.pdf', 'piece_index': 0}]
+            # self.chunks_downloaded = []
+
             print(f"INFO: Client initialized with {len(self.chunks_left)} remaining chunks.")
 
             # Connect to the tracker and peers
@@ -912,10 +944,10 @@ class Peer:
 
 
 port = input('port ') 
-a = Peer(int(port))   
+a = Peer(int(port), 'torrents/data.torrent.json', seeder=True)   
 a.Main()
 
-# A sample usage
+# # A sample usage
 # if __name__ == "__main__": 
 #     # port = input('port ')    
 #     # a.Main()
