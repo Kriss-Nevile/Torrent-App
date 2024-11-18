@@ -21,7 +21,7 @@ import hashlib
 # Import Configuration
 
 from config import PEICE_SIZE, OUTPUT_DIR, TRACKER_URL
-
+from config import timestamped_print as print
 
 #currently the implementation doesnt drop any connections, and will simply stop when it reaches the maimum number of peers
 
@@ -356,6 +356,9 @@ class Peer:
                         piece_index = payload['piece_index']
                         chunk_data = payload['chunk_data']
 
+                        if chunk_data is None or chunk_data == b'':
+                            continue
+
                         # Get payload info
                         chunk_metadata = {key: payload[key] for key in ['filepath', 'piece_index']}
                         
@@ -441,19 +444,34 @@ class Peer:
 
                 # Extract the base folder or file name
                 base_name = torrent_data['info']['name']
+
                 if len(torrent_data['info']['files']) == 1 and base_name == torrent_data['info']['files'][0]['path'][0]:
                     # Single-file torrent
                     file_info = torrent_data["info"]["files"][0]
                     filepath = base_name
                     pieces = file_info["pieces"]
-                    self.add_file(filepath, pieces)         # Add file to the client's local temp storage
+                    self.add_file(filepath, pieces)                         # Add file to the client's local temp storage
+                    
+                    # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
+                    for piece in pieces:
+                        if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
+                            self.chunks_left.append({"filepath": filepath, "piece_index": piece["index"]})
                 else:
                     # Multi-file torrent (folder with files)
                     for file_info in torrent_data["info"]["files"]:
                         filepath = os.path.join(base_name, *file_info["path"])
                         pieces = file_info["pieces"]
                         self.add_file(filepath, pieces)     # Add file to the client's local temp storage
+
+                        # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
+                        for piece in pieces:
+                            if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
+                                self.chunks_left.append({"filepath": filepath, "piece_index": piece["index"]})
+                
+                self.left = len(self.chunks_left)
+                print(f"INFO: Total chunks to download: {self.left}.")
                 return True
+
         except Exception as e:
             print(f"ERRRO: Failed to load torrent file: {e}")
             return False
