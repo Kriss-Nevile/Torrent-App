@@ -79,7 +79,7 @@ class File:
             for i in range(len(self.pieces_list)):
                 chunk_data = self.verified_pieces_data[i]
                 if(chunk_data is not None and isinstance(chunk_data, str)):
-                    piece_path = self.filepath + f'_{i}'
+                    piece_path = local_file_path + f'_{i}'
                     with open(piece_path, 'rb') as chunk_file:
                         out_file.write(chunk_file.read()) 
                     os.remove(piece_path)  # Remove the chunk file after loading
@@ -227,6 +227,7 @@ class Peer:
                                         piece_path = file_obj.verified_pieces_data[piece_index]
                                         chunk_data = None
                                         if piece_path is not None and isinstance(chunk_data, str):
+                                            piece_path = os.path.join(file_obj.output_directory, piece_path)
                                             with open(piece_path, 'rb') as chunk_file:
                                                 chunk_data = chunk_file.read()
 
@@ -576,7 +577,10 @@ class Peer:
             piece_hash = hashlib.sha1(chunk_data).hexdigest()
 
             if piece_hash == expected_hash:
-                piece_path = filepath + f'_{piece_index}'
+                local_file_path = os.path.join(file.output_directory, file.filepath)
+                os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+
+                piece_path = local_file_path + f'_{piece_index}'
                 with open(piece_path, 'wb') as out_file:
                     out_file.write(chunk_data)
 
@@ -969,7 +973,7 @@ class Peer:
 
 
 port = input('port ') 
-a = Peer(int(port), 'torrents/Assignment 1-Network Application P2P File Sharing.pdf.torrent.json', seeder=True)   
+a = Peer(int(port), 'torrents/data.torrent.json', seeder=True)   
 a.Main()
 
 # # A sample usage
