@@ -417,13 +417,17 @@ class Peer:
 
         self.primary_accept_socket = accept_socket
 
+        print(accept_socket)
+
         print(f"Listening on port {self.port}")
 
         while self.alive:
             readable, _, _ = select.select([accept_socket], [], [], 0.2) # Check if the socket is readable
+
             if readable:
 
                 neighbour_peer_socket, addr = accept_socket.accept()
+                print(neighbour_peer_socket, ' ', accept_socket)
                 with self.condition:
                     sub_thread = Thread(target=self.Handle_Neighbour_Peer, args=(neighbour_peer_socket,)).start()
                     self.condition.wait()
@@ -597,11 +601,26 @@ class Peer:
 
         self.peer_list.append(new_neighbour)
 
-        #send available chunks along with protocol message
-        pstrlen = 19                #The same signature for the protocol
+        # Prepare the message to include filepath and piece_index
+        packed_data = b''
+        for payload in self.chunks_downloaded:
+            filepath_bytes = payload['filepath'].encode('utf-8')
+            filepath_length = len(filepath_bytes)
+            piece_index = payload['piece_index']
+
+            # Format: [filepath length (4 bytes)][filepath (variable)][piece_index (4 bytes)]
+            packed_data += struct.pack(f'!I{filepath_length}sI', filepath_length, filepath_bytes, piece_index)
+
+        # Add protocol string and send the packed message
+        pstrlen = 19  # The protocol string length
         pstr = b"BitTorrent protocol"
-        send_data = struct.pack("!B", pstrlen) + pstr + struct.pack(f'!{len(self.chunks_downloaded)}I', *self.chunks_downloaded)
+
+        # Final message includes protocol info and packed piece info
+        send_data = struct.pack("!B", pstrlen) + pstr + packed_data
+
+        print(f"SEND DATA: {send_data}")
         self.send_all(peer_socket, send_data)
+
         #after this handle the message from the peer 
 
         #includes keep-alive, choke, unchoke, interested, not interested, have, bitfield, request, piece, cancel
@@ -777,15 +796,31 @@ class Peer:
                 
                 try:
                     response = self.perform_handshake(peer_socket)
-                    print(f"Available chunks: {len(response)},  {response}")
+                    print(f"Received handshake response. Total length: {len(response)} bytes.")
 
                     # Unpacking the data
-                    downloaded_unpacked = list(struct.unpack(f'!{len(response) // 4}I', response))
+                    available_chunks = []
+                    offset = 0
+                    while offset < len(response):
+                        # Extract filepath length
+                        filepath_length = struct.unpack('!I', response[offset:offset + 4])[0]
+                        offset += 4
 
-                    print(f"Unpacked downloaded: {downloaded_unpacked}")
-                    
+                        # Extract filepath
+                        filepath = response[offset:offset + filepath_length].decode('utf-8')
+                        offset += filepath_length
+
+                        # Extract piece index
+                        piece_index = struct.unpack('!I', response[offset:offset + 4])[0]
+                        offset += 4
+
+                        # Add the extracted payload to available_chunks
+                        available_chunks.append({"filepath": filepath, "piece_index": piece_index})
+
+                    print(f"INFO: Unpacked available chunks: {available_chunks}")
+
                     with self.general_update_lock:
-                        instance.available_chunks = instance.available_chunks = [chunk for chunk in downloaded_unpacked if chunk not in self.chunks_downloaded]
+                        instance.available_chunks = [chunk for chunk in available_chunks if chunk not in self.chunks_downloaded]
                     #Here we only consider the chunks that is useful to us
 
 
@@ -866,7 +901,7 @@ class Peer:
 
             # Connect to the tracker and peers
             print(f"INFO: Connecting to tracker at {self.URL}...")
-            self.Connect_torrent(self.URL)
+            self.Connect_torrent()
 
             # Connect to peers if the peer list is populated
             if self.peer_list:
@@ -875,6 +910,10 @@ class Peer:
             else:
                 print(f"ERROR: No peers found from the tracker.")
 
+
+port = input('port ') 
+a = Peer(int(port))   
+a.Main()
 
 # A sample usage
 # if __name__ == "__main__": 
