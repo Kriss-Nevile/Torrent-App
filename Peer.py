@@ -7,13 +7,10 @@ import random
 import requests
 from urllib.parse import urlencode
 import struct
-from enum import Enum
 import json
-from typing import List
 from datetime import datetime
 import messParser
 from Utils import State, Neighbour_Peer, Time_out
-import asyncio
 
 
 #currently the implementation doesnt drop any connections, and will simply stop when it reaches the maimum number of peers
@@ -50,7 +47,8 @@ import asyncio
 
 class Peer:
 
-    def __init__(self, port):
+    def __init__(self, port, update_stats_callback=None):
+        self.update_stats_callback = update_stats_callback
         self.max_peer_number = 20
         self.counter_lock = Lock()
         self.current_peer_number = 0
@@ -58,17 +56,19 @@ class Peer:
         self.queue_lock = Lock()
         self.time_lock = Lock()
         self.stop_event = Event()
+        # self.have_lock = Lock()
+        self.have_queue = []
         self.general_update_lock = Lock()
         self.max_councurrent_request = 100
         self.condition = Condition() # this is to halt the accepting socket if the number of socket have reached 
         # the maximum --> might remove this feature in the future
         self.primary_accept_socket = None
         self.alive = True
-        self.peer_id = None
+        self.peer_id = self.peer_id = datetime.now().strftime("%H%M%S%f") + str(random.randint(10000000, 99999999)) #generate a unique peer id
         self.info_hash = '12345678901234567890' #20 bytes
         self.peer_list = []
         self.top_four_peer = []
-        self.peer_list.append(Neighbour_Peer('localhost', self.port, 'self_peer')) #for testing purposes
+        #self.peer_list.append(Neighbour_Peer('localhost', self.port, 'self_peer')) #for testing purposes
         self.uploaded = 0
         self.downloaded = 10 #number of bytes downloaded
         self.chunks_downloaded = [0,1,2,3,4,5,6,7,8,9]   # used to keep track of the chunks downloaded, we if need to get size, we can use len(downloaded)
@@ -77,8 +77,56 @@ class Peer:
         self.duplicate = 0
         self.duplicate_lock = Lock()
         self.URL = 'https://simple-like-torrent-application.vercel.app/'
-        #self.block_all = False ( might use later idk )
-    
+        self.previous_downloaded = 0
+        self.previous_time = time.time()
+        self.count = {}
+        self.notinterestedcount = 0
+
+
+
+
+    #if a peer has available chunks, send an interested message
+    #if a peer has no available chunks, send a not interested message
+    def Check_avaiable_peers(self):
+        while self.alive:
+            with self.general_update_lock:
+                for peer in reversed(self.peer_list):
+                    if peer.sock is None or peer.sock.fileno() == -1:
+                        continue
+                    try:
+                        if peer.receive_status == State.peer_choking and peer.available_chunks:
+                            interested_message = messParser.construct_interested()
+                            self.send_all(peer.sock, interested_message)
+                            peer.update_time()
+                            print('sent interested message to peer with ID:', peer.ID)
+                        elif peer.receive_status == State.peer_interested and not peer.available_chunks:
+                            not_interested_message = messParser.construct_not_interested()
+                            self.send_all(peer.sock, not_interested_message)
+                            peer.update_time()
+                            print('sent not interested message to peer with ID:', peer.ID)
+                    except Exception as e:
+                        print(f"Connection has been closed: {e}")
+                        self.peer_list.remove(peer)
+                        continue
+            time.sleep(3)
+
+
+
+    #should be system wide
+    def Have_thread(self):
+        while self.alive:
+            with self.general_update_lock:
+                for tupled in reversed(self.have_queue):
+                    have_message = messParser.construct_have(tupled[0])
+                    for peer in self.peer_list:
+                        if peer.sock is not None and tupled[1] != peer.ID:
+                            self.send_all(peer.sock, have_message)
+                    #print(f"SEND: Sent have message for piece index {tupled[0]} to all peers")
+                    self.have_queue.remove(tupled)
+                    # The have message doesnt update the time
+            
+            time.sleep(1) #notify every 1 seconds
+
 
 
     #Function to send data
@@ -90,16 +138,15 @@ class Peer:
                     if time.time() - peer_obj.get_time() > 20 and peer_obj.send_status == State.am_choking and len(peer_obj.available_chunks) != 0:
                         keep_alive_message = messParser.construct_keep_alive()
                         self.send_all(peer_socket, keep_alive_message)
-                        print("SEND: Sent keep-alive message")
+                        print("SEND: Sent keep-alive message for peer with ID:", peer_obj.ID, "with available chunks", peer_obj.available_chunks)
                         peer_obj.update_time()
 
-                with self.general_update_lock:
-                    if not peer_obj.noted and self.left == 0:
-                        print('send track', peer_obj.send_track)
-                        not_interested_message = messParser.construct_not_interested()
-                        self.send_all(peer_socket, not_interested_message)
-                        peer_obj.noted = True
-                        peer_obj.update_time()
+                # with self.general_update_lock:
+                #     if not peer_obj.noted and self.left == 0:
+                #         not_interested_message = messParser.construct_not_interested()
+                #         self.send_all(peer_socket, not_interested_message)
+                #         peer_obj.noted = True
+                #         peer_obj.update_time()
                 
                 with self.general_update_lock:
                     with peer_obj.receive_lock:
@@ -114,7 +161,7 @@ class Peer:
                                     continue
                                 request_message = messParser.construct_request(piece_index)
                                 self.send_all(peer_socket, request_message)
-                                print(f"SEND: Sent request message for piece index {piece_index}")
+                                #print(f"SEND: Sent request message for piece index {piece_index}")
                                 peer_obj.update_time()
 
 
@@ -123,29 +170,14 @@ class Peer:
                 if peer_obj.Check_send_status():
                     # Handle requests from the request queue
                     with peer_obj.queue_lock:
-                        peer_obj.send_track.append(len(peer_obj.request_queue))
-                        print('request queue:', peer_obj.request_queue)
+                        #print('request queue:', peer_obj.request_queue)
                         for request in reversed(peer_obj.request_queue):
                             piece_message = messParser.construct_piece(request)
                             self.send_all(peer_socket, piece_message)
-                            print(f"SEND: Sent piece message for request {request}")
+                            #print(f"SEND: Sent piece message for request {request}")
                             peer_obj.request_queue.remove(request)
                             peer_obj.update_time()
-                    # else:    #save for later use
-                    #     # Send have message for a random piece
-                    #     if peer_obj.available_chunks:
-                    #         piece_index = random.choice(peer_obj.available_chunks)
-                    #         have_message = messParser.construct_have(piece_index)
-                    #         self.send_all(peer_socket, have_message)
-                    #         print(f"SEND: Sent have message for piece index {piece_index}")
-                    #         peer_obj.last_message_time = time.time()
-                    #     else:
-                    #         # Send not interested message if no pieces are available
-                    #         not_interested_message = messParser.construct_not_interested()
-                    #         self.send_all(peer_socket, not_interested_message)
-                    #         print("SEND: Sent not interested message")
-                    #         peer_obj.last_message_time = time.time()
-                    #         break
+
 
                 time.sleep(1)  # Sleep to avoid busy waiting
 
@@ -156,6 +188,21 @@ class Peer:
                 break
 
         print("SEND: Send closed for peer with ID:", peer_obj.ID, '\n')
+
+
+
+
+    def Measure_download_speed(self):
+        while self.alive:
+            with self.general_update_lock:
+                download_speed = (self.downloaded - self.previous_downloaded) / (time.time() - self.previous_time)
+                self.previous_downloaded = self.downloaded
+                self.previous_time = time.time()
+
+                if self.update_stats_callback:
+                    self.update_stats_callback(download_speed, self.downloaded / 30, len(self.peer_list), 0)
+
+            time.sleep(1)
 
 
 
@@ -201,17 +248,18 @@ class Peer:
                         choke_message = messParser.construct_choke()
                         self.send_all(peer_socket, choke_message)
                         print('sent choke message')
-                        print('send track', peer_obj.send_track)
                     elif message_type == 'have':
-                        print(f"REC: Received have message for piece index {payload}")
-                        peer_obj.available_chunks.append(payload)
+                        #print(f"REC: Received have message for piece index {payload}")
+                        with self.general_update_lock:
+                            if payload in self.chunks_left:
+                                peer_obj.available_chunks.append(payload)
                     elif message_type == 'request':
-                        print(f"REC: Received request message for piece index {payload}")
+                        #print(f"REC: Received request message for piece index {payload}")
                         with peer_obj.queue_lock:
                             if payload not in peer_obj.request_queue and len(peer_obj.request_queue) < self.max_councurrent_request:
                                 peer_obj.request_queue.append(payload)
                     elif message_type == 'piece':
-                        print("REC: Received message for piece index", payload, "from peer with ID:", peer_obj.ID)
+                        #print("REC: Received message for piece index", payload, "from peer with ID:", peer_obj.ID)
 
 
                         with self.general_update_lock:
@@ -226,25 +274,50 @@ class Peer:
                                     self.left -= 1
                                     self.chunks_left.remove(payload)
 
+                                    if peer_obj.ID not in self.count:
+                                        self.count[peer_obj.ID] = 1
+                                    else:
+                                        self.count[peer_obj.ID] += 1
+
+
+                                    self.have_queue.append((payload, peer_obj.ID))
+
                                     for neighbour_peer in self.peer_list:
                                         if payload in neighbour_peer.available_chunks:
                                             neighbour_peer.available_chunks.remove(payload) 
 
                                     if self.left == 0:
                                         print("REC: Download complete and send a not interested message")
+                                        #Make a HTTP GET request to the tracker with the event 'completed'
+
+                                        params = {
+                                        "info_hash": self.info_hash,
+                                        "ip": "127.0.0.1",  # Your IP address
+                                        "peer_id": self.peer_id,  #Assign a unique peer ID
+                                        "port": self.port,  # Port your client listens on for incoming peer connections
+                                        "downloaded": self.downloaded,
+                                        # "downloaded": self.downloaded,
+                                        "left": self.left,  # Placeholder for the amount left to download
+                                        # "compact": 1, #reserved for future use
+                                        "event": "completed"
+                                        }
+                                        
+                                        response = requests.get(self.URL, params=params)
                                         self.chunks_downloaded.sort()
-                                        print('sorted Downloaded:', self.chunks_downloaded, 'length:', len(self.chunks_downloaded))
+                                        #print('sorted Downloaded:', self.chunks_downloaded, 'length:', len(self.chunks_downloaded))
                                         print('number of duplicate:', self.duplicate)
+                                        print('number of pieces for each peer:', self.count)
+                                        for peer in self.peer_list:
+                                            print("available chunks for peer with ID:", peer.ID," ", peer.available_chunks)
             
                             else:
-                                print("REC: Received duplicate piece message")
+                                #print("REC: Received duplicate piece message")
                                 with self.duplicate_lock:
                                     self.duplicate += 1
                             
                             #break
                     else:
-                        print("REC: Connection closed")
-                        break
+                        print("REC: Received unknown message", message)
                 except Exception as e:
                     with peer_obj.live_lock:
                         peer_obj.is_alive = False
@@ -296,8 +369,10 @@ class Peer:
     
     def send_all(self, sock, data):
         # First send the size of the data
+        if sock is None or sock.fileno() == -1:
+            return
         data_size = len(data)
-        sock.sendall(struct.pack('!I', data_size))
+        sock.sendall(struct.pack('!I', data_size))  #might add + data
         # Then send the actual data
         sock.sendall(data)
 
@@ -343,15 +418,29 @@ class Peer:
         id = message[48:68].decode('utf-8')
         print(f"Accept connect from peer {IP}:{port} with ID: {id}")
 
-        new_neighbour = Neighbour_Peer(IP, port, id)
+        new_neighbour = Neighbour_Peer(IP, port, id, peer_socket)
 
-        self.peer_list.append(new_neighbour)
+        with self.general_update_lock: #to synchronize the chunks_downloaded with have messages
+            self.peer_list.append(new_neighbour)
 
-        #send available chunks along with protocol message
-        pstrlen = 19                #The same signature for the protocol
-        pstr = b"BitTorrent protocol"
-        send_data = struct.pack("!B", pstrlen) + pstr + struct.pack(f'!{len(self.chunks_downloaded)}I', *self.chunks_downloaded)
-        self.send_all(peer_socket, send_data)
+            #send available chunks along with protocol message
+            pstrlen = 19                #The same signature for the protocol
+            pstr = b"BitTorrent protocol"
+            reserved = b"\x00" * 8
+            send_data = struct.pack("!B", pstrlen) + pstr + reserved + str(self.info_hash).encode() + struct.pack(f'!{len(self.chunks_downloaded)}I', *self.chunks_downloaded)
+            self.send_all(peer_socket, send_data)
+        #receive the available chunks from the peer
+        message = self.receive_all(peer_socket)
+
+        if self.Check_Peer_Request(message):
+            print('received available chunks from new neighbour') 
+            data = message[48:]
+            if len(data) % 4 == 0 and len(data) >= 0:
+                available_chunks_peer = list(struct.unpack(f'!{len(data) // 4}I', data))
+        
+            with self.general_update_lock:
+                new_neighbour.available_chunks  = [chunk for chunk in available_chunks_peer if chunk not in self.chunks_downloaded]
+
         #after this handle the message from the peer 
 
         #includes keep-alive, choke, unchoke, interested, not interested, have, bitfield, request, piece, cancel
@@ -383,7 +472,6 @@ class Peer:
 
     def Connect_torrent(self, URL):
         try:
-            self.peer_id = datetime.now().strftime("%H%M%S%f") + str(random.randint(10000000, 99999999))  # Generate a unique peer ID
             params = {
             "info_hash": self.info_hash,
             "ip": "127.0.0.1",  # Your IP address
@@ -425,9 +513,9 @@ class Peer:
                     
                     if ip and port is not None:  # Ensure both IP and port are available
                         peers.append(Neighbour_Peer(ip, port, id))
-            
-            self.peer_list = peers
-            self.top_four_peer = peers[:4]  # Keep the top 4 peers
+            with self.general_update_lock:
+                self.peer_list = peers
+                self.top_four_peer = peers[:4]  # Keep the top 4 peers
         
         except json.JSONDecodeError:
             print("Failed to decode JSON response")
@@ -448,19 +536,19 @@ class Peer:
             try:
                 peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 peer_socket.connect((instance.IP, instance.port))
+
+
                 print(f"Connected to peer {instance.IP}:{instance.port}")
                 
                 try:
                     response = self.perform_handshake(peer_socket)
-                    print(f"Available chunks: {len(response)},  {response}")
-
                     # Unpacking the data
                     downloaded_unpacked = list(struct.unpack(f'!{len(response) // 4}I', response))
 
                     print(f"Unpacked downloaded: {downloaded_unpacked}")
                     
                     with self.general_update_lock:
-                        instance.available_chunks = instance.available_chunks = [chunk for chunk in downloaded_unpacked if chunk not in self.chunks_downloaded]
+                        instance.available_chunks = [chunk for chunk in downloaded_unpacked if chunk not in self.chunks_downloaded]
                     #Here we only consider the chunks that is useful to us
 
 
@@ -472,16 +560,23 @@ class Peer:
 
                     send_thread.start()
                     receive_thread.start()
+                    
+                    with self.general_update_lock:
+                        instance.Set_sock(peer_socket)  #apply the socket to the peer
 
                     threads_and_sock.append((send_thread, receive_thread, peer_socket))
 
                 except Exception as e:
                     print(f"Failed to perform handshake with peer {instance.IP}:{instance.port} - {e}\n\n")
+                    self.peer_list.remove(instance)
+                    peer_socket.close()
+                    
 
             except Exception as e:
                 print(f"Failed to connect to peer {instance.IP}:{instance.port} - {e}\n\n")
                 #delete the failed peer
                 self.peer_list.remove(instance)
+                
                 # new_thread = Thread(target=self.handling_peer, args=(peer_socket, instance))
                 # new_thread.start()
 
@@ -493,11 +588,7 @@ class Peer:
             thread[0].join()
             thread[1].join()
             thread[2].close()
-        input()
-
-
-    def handling_peer(self, peer_socket, peer_obj: Neighbour_Peer):
-        pass
+        
 
 
     # Handshake between 2 peers
@@ -511,9 +602,14 @@ class Peer:
         self.send_all(peer_socket, handshake)
         response = self.receive_all(peer_socket)
         
-        if response[:20] == handshake[:20]: # Check if they have the protocol string
+        if self.Check_Peer_Request(response): # Check if they have the protocol string
             print("Handshake successful")
-            return response[20:]  # Return the available chunks
+            #inform the peer of our own available chunks
+            with self.general_update_lock:
+                send_data = struct.pack("!B", pstrlen) + pstr + reserved + str(self.info_hash).encode() + struct.pack(f'!{len(self.chunks_downloaded)}I', *self.chunks_downloaded)
+                self.send_all(peer_socket, send_data)
+
+            return response[48:]  # Return the available chunks
         else:
             print("Handshake failed")
 
@@ -521,21 +617,41 @@ class Peer:
     
     def Main(self):
         message = input('server or client ')
-        if message == 'server1':
-            self.chunks_downloaded = [i for i in range(768)]
+        if message == 'seeder':
+            self.chunks_downloaded = [i for i in range(3000)]
+            self.left = 0
+            self.downloaded = 3000
+            self.chunks_left = []
             self.Accepting_request()
-        if message == 'server2':
-            self.chunks_downloaded = [i for i in range(689, 1575)]
-            self.Accepting_request()
-        if message == 'server3':
-            self.chunks_downloaded = [i for i in range(1450, 2000)]
-            self.Accepting_request()
-        elif message == 'client':
-            self.downloaded = 0
-            self.left = 2000
-            self.chunks_left = [i for i in range(2000)]
+        elif message == 'client1':
             self.chunks_downloaded = []
+            self.downloaded = 0
+            self.left = 3000
+            self.chunks_left = [i for i in range(3000)]
+            accept_thread = Thread(target=self.Accepting_request).start()    #This should start as a thread
+            have_thread = Thread(target=self.Have_thread).start()
+            check_thread = Thread(target=self.Check_avaiable_peers).start()
+            self.Connect_torrent(self.URL) 
+            self.connect_to_peers()
+        elif message == 'client2':
+            self.downloaded = 0
+            self.left = 3000
+            self.chunks_left = [i for i in range(3000)]
+            self.chunks_downloaded = []
+            accept_thread = Thread(target=self.Accepting_request).start()    #This should start as a thread
+            have_thread = Thread(target=self.Have_thread).start()
+            check_thread = Thread(target=self.Check_avaiable_peers).start()
+            self.Connect_torrent(self.URL) 
+            self.connect_to_peers()
+        elif message == 'client3':
+            self.downloaded = 0
+            self.left = 3000
+            self.chunks_left = [i for i in range(3000)]
+            self.chunks_downloaded = []
+            have_thread = Thread(target=self.Have_thread).start()
+            check_thread = Thread(target=self.Check_avaiable_peers).start()
             print(self.port)
+            #measurement_thread = Thread(target=self.Measure_download_speed).start()
             self.Connect_torrent(self.URL)
             #after we have obtained peer_list, we can connect to the peers
             if self.peer_list:
@@ -545,9 +661,32 @@ class Peer:
         #     self.Accepting_request()
         # elif go == 'client':
         #     self.connect_to_peers()
+        input('exit')
 
 port = input('port ')    
 
 a = Peer(int(port))
 a.Main()
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#note the main peer doesnt have a live lock yet, may cause issues
