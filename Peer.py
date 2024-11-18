@@ -77,7 +77,14 @@ class File:
 
         with open(local_file_path, 'wb') as out_file:
             for i in range(len(self.pieces_list)):
-                out_file.write(self.verified_pieces_data[i]) 
+                chunk_data = self.verified_pieces_data[i]
+                if(chunk_data is not None and isinstance(chunk_data, str)):
+                    piece_path = self.filepath + f'_{i}'
+                    with open(piece_path, 'rb') as chunk_file:
+                        out_file.write(chunk_file.read()) 
+                    os.remove(piece_path)  # Remove the chunk file after loading
+                else:
+                    out_file.write(chunk_data) 
 
         print(f"INFO - File '{self.filepath}' successfully reconstructed and saved to '{local_file_path}'.")
 
@@ -217,7 +224,12 @@ class Peer:
                                 file_obj = next((f for f in self.local_storage if f.filepath == filepath), None)
                                 if file_obj:
                                     if 0 <= piece_index < len(file_obj.verified_pieces_data):
-                                        chunk_data = file_obj.verified_pieces_data[piece_index]
+                                        piece_path = file_obj.verified_pieces_data[piece_index]
+                                        chunk_data = None
+                                        if piece_path is not None and isinstance(chunk_data, str):
+                                            with open(piece_path, 'rb') as chunk_file:
+                                                chunk_data = chunk_file.read()
+
                                         if chunk_data is None:
                                             print(f"INFO: Chunk for file '{filepath}', index {piece_index} not yet verified in local storage from {peer_obj.ID}")
                                     else:
@@ -443,8 +455,13 @@ class Peer:
     def Read_Torrent(self, torrent_file):
         if self.seeder:
             try:
+                
                 with open(torrent_file, "r") as file:
                     torrent_data = json.load(file)
+
+                    # Extract the base folder or file name
+                    base_name = torrent_data['info']['name']
+
                     if len(torrent_data['info']['files']) == 1 and base_name == torrent_data['info']['files'][0]['path'][0]:
                         # Single-file torrent
                         file_info = torrent_data["info"]["files"][0]
@@ -559,7 +576,12 @@ class Peer:
             piece_hash = hashlib.sha1(chunk_data).hexdigest()
 
             if piece_hash == expected_hash:
-                file.verified_pieces_data[piece_index] = chunk_data
+                piece_path = filepath + f'_{piece_index}'
+                with open(piece_path, 'wb') as out_file:
+                    out_file.write(chunk_data)
+
+                file.verified_pieces_data[piece_index] = filepath + f'_{piece_index}'
+
                 print(f"INFO - Piece {piece_index} for file '{file.filepath}' verified and stored.")
                 
                 # If all pieces are verified, write out the file
@@ -770,8 +792,11 @@ class Peer:
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
                 # Save each chunk separately
-                for i, chunk_data in enumerate(file_obj.verified_pieces_data):
-                    if chunk_data is not None:
+                for i, piece_path in enumerate(file_obj.verified_pieces_data):
+                    # if piece_path is not None and isinstance(piece_path, str):
+                    #     file_obj.verified_pieces_data[i] = None
+                    if piece_path is not None and not isinstance(piece_path, str):
+                        chunk_data = piece_path
                         piece_path = file_path + f'_{i}'
                         with open(piece_path, 'wb') as out_file:
                             out_file.write(chunk_data)
@@ -796,9 +821,9 @@ class Peer:
                 for i in range(len(file_obj.pieces_list)):
                     piece_path = file_path + f'_{i}'
                     if os.path.exists(piece_path):
-                        with open(piece_path, 'rb') as chunk_file:
-                            file_obj.verified_pieces_data[i] = chunk_file.read()
-                        os.remove(piece_path)  # Remove the chunk file after loading
+                        # with open(piece_path, 'rb') as chunk_file:
+                        file_obj.verified_pieces_data[i] = str(piece_path)
+                        # os.remove(piece_path)  # Remove the chunk file after loading
                         print(f"INFO: Loaded chunk {i} of file '{file_obj.filepath}' from '{piece_path}'.")
                     # else:
                     #     print(f"WARNING: Chunk file '{piece_path}' not found. Assuming missing chunk.")
@@ -944,7 +969,7 @@ class Peer:
 
 
 port = input('port ') 
-a = Peer(int(port), 'torrents/data.torrent.json', seeder=True)   
+a = Peer(int(port), 'torrents/Assignment 1-Network Application P2P File Sharing.pdf.torrent.json', seeder=True)   
 a.Main()
 
 # # A sample usage

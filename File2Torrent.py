@@ -2,13 +2,13 @@ import hashlib
 import os
 import json
 
-from config import PEICE_SIZE
+from config import PEICE_SIZE, TRACKER_URL
 
 def generate_magnet_text(metainfo_file):
     with open(metainfo_file, "rb") as file:
         metainfo_hash = hashlib.sha256(file.read()).hexdigest()
     
-    tracker_url = "your-tracker-portal.local"  # Replace with actual tracker portal URL or IP
+    tracker_url = TRACKER_URL  # Replace with actual tracker portal URL or IP
     magnet_text = f"magnet:?xt=urn:sha256:{metainfo_hash}&dn={metainfo_file}&tr={tracker_url}"
     
     return magnet_text
@@ -31,7 +31,7 @@ def generate_pieces(file_path, piece_size=PEICE_SIZE*1024):
 
 def generate_torrent_json(directory, piece_length=PEICE_SIZE):
     torrent_data = {
-        "tracker": "your-tracker-portal.local",
+        "tracker": TRACKER_URL,
         "info": {
             "name": os.path.basename(directory),
             "piece length": piece_length,
@@ -74,6 +74,6 @@ def save_torrent_json(directory, output_filename):
 
 
 # Example usage:
-# directory = "../data"
-# file_name = os.path.basename(directory)
-# save_torrent_json(directory, f"{file_name}.torrent.json")
+directory = "us_eval.split.z01"
+file_name = os.path.basename(directory)
+save_torrent_json(directory, f"torrents/{file_name}.torrent.json")
