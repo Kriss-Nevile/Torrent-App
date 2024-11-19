@@ -19,14 +19,14 @@ def construct_have(piece_index):
     return struct.pack('!IBI', 5, 4, piece_index)
 
 def construct_request(piece_index):
-    return struct.pack('!IBI', 9, 6, piece_index)
+    return struct.pack('!IBI', 5, 6, piece_index)
 
 def construct_piece(piece_index):
-    return struct.pack('!IBI', 9, 7, piece_index)
+    return struct.pack('!IBI', 5, 7, piece_index)
 
 def construct_piece_with_data(piece_index,  block):
     length = len(block)
-    return struct.pack('!IBI' + str(length) + 's', 9 + length, 7, piece_index, block)
+    return struct.pack('!IBI' + str(length) + 's', 5 + length, 7, piece_index, block)
 #reserve for later use
 
 def parse_message(message):

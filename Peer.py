@@ -87,50 +87,54 @@ class Peer:
 
     #if a peer has available chunks, send an interested message
     #if a peer has no available chunks, send a not interested message
-    def Check_avaiable_peers(self):
+    def Check_available_peers(self, socket: socket.socket, peer_obj: Neighbour_Peer):
         while self.alive:
             with self.general_update_lock:
-                for peer in reversed(self.peer_list):
-                    if peer.sock is None or peer.sock.fileno() == -1:
-                        continue
-                    try:
-                        if peer.receive_status == State.peer_choking and peer.available_chunks:
-                            interested_message = messParser.construct_interested()
-                            self.send_all(peer.sock, interested_message)
-                            peer.update_time()
-                            print('sent interested message to peer with ID:', peer.ID)
-                        elif peer.receive_status == State.peer_interested and not peer.available_chunks:
-                            not_interested_message = messParser.construct_not_interested()
-                            self.send_all(peer.sock, not_interested_message)
-                            peer.update_time()
-                            print('sent not interested message to peer with ID:', peer.ID)
-                    except Exception as e:
-                        print(f"Connection has been closed: {e}")
-                        self.peer_list.remove(peer)
-                        continue
+                try:
+                    if peer_obj.receive_status == State.peer_choking and peer_obj.available_chunks:
+                        interested_message = messParser.construct_interested()
+                        self.send_all(socket, interested_message)
+                        peer_obj.update_time()
+                        print('sent interested message to peer with ID:', peer_obj.ID)
+                    elif peer_obj.receive_status == State.peer_interested and not peer_obj.available_chunks:
+                        not_interested_message = messParser.construct_not_interested()
+                        self.send_all(socket, not_interested_message)
+                        peer_obj.update_time()
+                        print('peer status:', peer_obj.receive_status)
+                        print('sent not interested message to peer with ID:', peer_obj.ID)
+
+                except Exception as e:
+                    print(f"Connection has been closed: {e}")
+
             time.sleep(3)
+        
+        print('2 ways infrom closed')
 
 
 
     #should be system wide
-    def Have_thread(self):
-        while self.alive:
-            with self.general_update_lock:
-                for tupled in reversed(self.have_queue):
-                    have_message = messParser.construct_have(tupled[0])
-                    for peer in self.peer_list:
-                        if peer.sock is not None and tupled[1] != peer.ID:
-                            self.send_all(peer.sock, have_message)
-                    #print(f"SEND: Sent have message for piece index {tupled[0]} to all peers")
-                    self.have_queue.remove(tupled)
-                    # The have message doesnt update the time
+    # def Have_thread(self):
+    #     while self.alive:
+    #         with self.general_update_lock:
+    #             for tupled in reversed(self.have_queue):
+    #                 have_message = messParser.construct_have(tupled[0])
+    #                 for peer in self.peer_list:
+    #                     if peer.sock is not None and tupled[1] != peer.ID:
+    #                         self.send_all(peer.sock, have_message)
+    #                 #print(f"SEND: Sent have message for piece index {tupled[0]} to all peers")
+    #                 self.have_queue.remove(tupled)
+    #                 # The have message doesnt update the time
             
-            time.sleep(1) #notify every 1 seconds
+    #         time.sleep(1) #notify every 1 seconds
 
 
 
     #Function to send data
     def Send_(self, peer_socket, peer_obj: Neighbour_Peer):
+
+        check_thread = Thread(target=self.Check_available_peers, args=(peer_socket, peer_obj))
+        check_thread.start()
+
         while peer_obj.Check_alive():
             try:
                 #Send keep-alive message if no other message is sent for a certain period
@@ -177,6 +181,16 @@ class Peer:
                             #print(f"SEND: Sent piece message for request {request}")
                             peer_obj.request_queue.remove(request)
                             peer_obj.update_time()
+                
+                with self.general_update_lock:
+                    for tupled in reversed(self.have_queue):
+                        have_message = messParser.construct_have(tupled[0])
+                        for peer in self.peer_list:
+                            if peer.sock is not None and tupled[1] != peer.ID:
+                                self.send_all(peer.sock, have_message)
+                        #print(f"SEND: Sent have message for piece index {tupled[0]} to all peers")
+                        self.have_queue.remove(tupled)
+                        # The have message doesnt update the time
 
 
                 time.sleep(1)  # Sleep to avoid busy waiting
@@ -186,7 +200,8 @@ class Peer:
                     peer_obj.is_alive = False
                 print(f"Error sending message: {e}")
                 break
-
+        
+        check_thread.join()
         print("SEND: Send closed for peer with ID:", peer_obj.ID, '\n')
 
 
@@ -372,9 +387,8 @@ class Peer:
         if sock is None or sock.fileno() == -1:
             return
         data_size = len(data)
-        sock.sendall(struct.pack('!I', data_size))  #might add + data
-        # Then send the actual data
-        sock.sendall(data)
+
+        sock.sendall(struct.pack('!I', data_size) + data)  #might add + data
 
 
     def receive_all(self, sock):
@@ -629,8 +643,6 @@ class Peer:
             self.left = 3000
             self.chunks_left = [i for i in range(3000)]
             accept_thread = Thread(target=self.Accepting_request).start()    #This should start as a thread
-            have_thread = Thread(target=self.Have_thread).start()
-            check_thread = Thread(target=self.Check_avaiable_peers).start()
             self.Connect_torrent(self.URL) 
             self.connect_to_peers()
         elif message == 'client2':
@@ -639,8 +651,6 @@ class Peer:
             self.chunks_left = [i for i in range(3000)]
             self.chunks_downloaded = []
             accept_thread = Thread(target=self.Accepting_request).start()    #This should start as a thread
-            have_thread = Thread(target=self.Have_thread).start()
-            check_thread = Thread(target=self.Check_avaiable_peers).start()
             self.Connect_torrent(self.URL) 
             self.connect_to_peers()
         elif message == 'client3':
@@ -648,8 +658,6 @@ class Peer:
             self.left = 3000
             self.chunks_left = [i for i in range(3000)]
             self.chunks_downloaded = []
-            have_thread = Thread(target=self.Have_thread).start()
-            check_thread = Thread(target=self.Check_avaiable_peers).start()
             print(self.port)
             #measurement_thread = Thread(target=self.Measure_download_speed).start()
             self.Connect_torrent(self.URL)
