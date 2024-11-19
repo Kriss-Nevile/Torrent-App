@@ -324,6 +324,8 @@ class Peer:
                                         print('number of pieces for each peer:', self.count)
                                         for peer in self.peer_list:
                                             print("available chunks for peer with ID:", peer.ID," ", peer.available_chunks)
+                                        
+                                        time.sleep(1)
             
                             else:
                                 #print("REC: Received duplicate piece message")
