@@ -20,6 +20,7 @@ class Neighbour_Peer:
         self.IP = IP
         self.port = port
         self.ID = ID
+        self.timer_stop = False
         self.send_status = State.am_choking #start condition
         self.receive_status = State.peer_choking #start condition
         self.available_chunks = []
@@ -79,9 +80,11 @@ def reassemble_file(pieces):
 
 
 
-def Time_out(neighbour_peer):
+def Time_out(neighbour_peer: Neighbour_Peer):
     while neighbour_peer.Check_alive():
-        if time.time() - neighbour_peer.last_message_time > 60:
+        if neighbour_peer.timer_stop:
+            neighbour_peer.update_time
+        elif time.time() - neighbour_peer.last_message_time > 60:
             with neighbour_peer.live_lock:
                 neighbour_peer.is_alive = False
                 print('Time out for peer with ID: ', neighbour_peer.ID, 'waiting for shutdown')
@@ -89,7 +92,7 @@ def Time_out(neighbour_peer):
         time.sleep(1)
 
 
-
+#These are not used yet
 def Download_rate(neighbour_peer):
     while neighbour_peer.is_alive:
         time.sleep(1)
