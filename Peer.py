@@ -58,6 +58,8 @@ class File:
         print(f"INFO - File '{self.filepath}' successfully reconstructed and saved to '{local_file_path}'.")
 
 
+#Avoid nested locks at all costs --> if it is inevitable, always lock in the same order
+#A Problem i called phantom dependency --> a send lock shouldnt be in the recive lock
 
 
 
@@ -78,8 +80,9 @@ class Peer:
         self.stop_event = Event()
         self.interested_but_blocked = []
         # self.have_lock = Lock()
-        self.have_queue = []
+        #self.have_queue = []
         self.general_update_lock = Lock()
+        self.completed = False
         self.max_councurrent_request = 20
         self.condition = Condition() # this is to halt the accepting socket if the number of socket have reached 
         # the maximum --> might remove this feature in the future
@@ -87,9 +90,9 @@ class Peer:
         self.alive = True
         self.peer_id = self.peer_id = datetime.now().strftime("%H%M%S%f") + str(random.randint(10000000, 99999999)) #generate a unique peer id
         self.info_hash = None #20 bytes
-        self.max_unchoked_peers = 5
+        # self.max_unchoked_peers = 5
         self.peer_list = []
-        self.unchoked_peer = [] #we're implementing 4 + 1 algorithm
+        # self.unchoked_peer = [] #we're implementing 4 + 1 algorithm
         #self.peer_list.append(Neighbour_Peer('localhost', self.port, 'self_peer')) #for testing purposes
         self.uploaded = 0
         self.downloaded = 0 #number of bytes downloaded
@@ -139,7 +142,6 @@ class Peer:
         while peer_obj.Check_alive():
             # print('length of available chunks:', len(peer_obj.available_chunks), 'for peer with ID:', peer_obj.ID)
             try:
-                print('received status:', peer_obj.receive_status, 'has chunks:', peer_obj.has_chunks())
                 if not peer_obj.Check_receive_status() and peer_obj.has_chunks():
                     interested_message = messParser.construct_interested()
                     with peer_obj.queue_send_lock:
@@ -216,33 +218,33 @@ class Peer:
 
 
     #implemt 4 + 1 peer selection algorithm
-    def Tit_for_tat(self): 
-        while self.Check_alive():
-            # Sort peers based on the number of pieces they have sent
-            remove = []
-            with self.general_update_lock: 
-                if len(self.peer_list) > self.max_unchoked_peers + 1:
-                    for peer in self.peer_list: peer.toggle_modifying()
+    # def Tit_for_tat(self): 
+    #     while self.Check_alive():
+    #         # Sort peers based on the number of pieces they have sent
+    #         remove = []
+    #         with self.general_update_lock: 
+    #             if len(self.peer_list) > self.max_unchoked_peers + 1:
+    #                 for peer in self.peer_list: peer.toggle_modifying()
 
-                    self.peer_list.sort(reverse=True)
-                    new_peers = self.peer_list[:self.max_unchoked_peers]
-                    if self.peer_list[self.max_unchoked_peers:]:
-                        new_peers += random.sample(self.peer_list[self.max_unchoked_peers:], 1)
-                    for peers in self.unchoked_peer:
-                        if peers not in new_peers:
-                            remove.append(peers)
+    #                 self.peer_list.sort(reverse=True)
+    #                 new_peers = self.peer_list[:self.max_unchoked_peers]
+    #                 if self.peer_list[self.max_unchoked_peers:]:
+    #                     new_peers += random.sample(self.peer_list[self.max_unchoked_peers:], 1)
+    #                 for peers in self.unchoked_peer:
+    #                     if peers not in new_peers:
+    #                         remove.append(peers)
 
-                    self.unchoked_peer = new_peers
+    #                 self.unchoked_peer = new_peers
 
-                    for peer in self.peer_list: peer.toggle_modifying()  
-                    print('new unchoked peers after tit for tat', self.unchoked_peer)
+    #                 for peer in self.peer_list: peer.toggle_modifying()  
+    #                 print('new unchoked peers after tit for tat', self.unchoked_peer)
             
-            for peer in remove:
-                peer.update_send_status(State.am_choking)
-                with peer.queue_send_lock:
-                    peer.control_queue.append(messParser.construct_choke())
+    #         for peer in remove:
+    #             peer.update_send_status(State.am_choking)
+    #             with peer.queue_send_lock:
+    #                 peer.control_queue.append(messParser.construct_choke())
 
-            time.sleep(15)  # Re-evaluate every 15 seconds
+    #         time.sleep(15)  # Re-evaluate every 15 seconds
         
 
 
@@ -268,18 +270,24 @@ class Peer:
                         peer_obj.control_queue.remove(control)
                     #print('sent', control[1], 'message to peer with ID:', peer_obj.ID)
                     peer_obj.update_time()
+            # time.sleep(0.5)
+            # with peer_obj.queue_send_lock:
                 if peer_obj.have_queue:
                     for have in reversed(peer_obj.have_queue):
                         self.send_all(peer_socket, have)
                         peer_obj.have_queue.remove(have)
                         #print('sent have message for index', have, 'to peer with ID:', peer_obj.ID)
                     peer_obj.update_time()
+            # time.sleep(0.5)
+            # with peer_obj.queue_send_lock:
                 if peer_obj.request_queue:      
                     for request in reversed(peer_obj.request_queue):
                         self.send_all(peer_socket, request)
                         peer_obj.request_queue.remove(request)
                     peer_obj.update_time()
                     # print('request sent to peer with ID:', peer_obj.ID)
+            # time.sleep(0.5)
+            # with peer_obj.queue_send_lock:
                 if peer_obj.piece_queue:
                     for piece in reversed(peer_obj.piece_queue):
                         data = self.handle_request(piece[0], piece[1], piece[2])    
@@ -297,10 +305,10 @@ class Peer:
         peer_socket.close()
         with self.general_update_lock:
             self.peer_list.remove(peer_obj)
-            if peer_obj in self.unchoked_peer:
-                self.unchoked_peer.remove(peer_obj)
-                filtered = [peer for peer in self.peer_list if peer not in self.unchoked_peer]
-                if filtered: self.unchoked_peer.append(random.choice(filtered))
+            # if peer_obj in self.unchoked_peer:
+            #     self.unchoked_peer.remove(peer_obj)
+            #     filtered = [peer for peer in self.peer_list if peer not in self.unchoked_peer]
+            #     if filtered: self.unchoked_peer.append(random.choice(filtered))
 
         check_thread.join()
         keep_alive_thread.join()    
@@ -412,127 +420,155 @@ class Peer:
     #Function to receive data
     def Receive_(self, peer_socket, peer_obj: Neighbour_Peer):
         receive_queue_thread = Thread(target=self.receive_queue, args=(peer_socket, peer_obj)).start()
+        
+        message_queue = []
+        meta_data_list = []
+
         while peer_obj.Check_alive():
-            with peer_obj.queue_receive_lock:
-                # print('piece queue for peer with ID:', peer_obj.ID, 'have size:', len(peer_obj.receive_piece_queue))
-                while peer_obj.receive_control_queue:
-                    payload, message_type = peer_obj.receive_control_queue.pop()
-                    #print('received', message_type, 'message from peer with ID:', peer_obj.ID)
-                    if message_type == 'keep-alive': pass
-                    elif message_type == 'choke':
-                        print('REC: Received choke message from peer with ID:', peer_obj.ID)
-                        peer_obj.update_receive_status(State.peer_choking)
-                    elif message_type == 'unchoke':
-                        peer_obj.update_receive_status(State.peer_interested)
-                        print('REC: Received unchoke message from peer with ID:', peer_obj.ID)
-                    elif peer_obj in self.unchoked_peer and message_type == 'interested':
-                        print('REC: Received interested message from peer with ID:', peer_obj.ID)
-                        unchoke_message = messParser.construct_unchoke()
-                        with peer_obj.queue_send_lock:
-                            peer_obj.control_queue.append(unchoke_message)
-                        peer_obj.update_send_status(State.am_interested)
-                    else:
-                        print('REC: Received not interested message from peer with ID:', peer_obj.ID)
-                        choke_message = messParser.construct_choke()
-                        with peer_obj.queue_send_lock:
-                            peer_obj.control_queue.append(choke_message)
-                        peer_obj.update_send_status(State.am_choking)
-                while peer_obj.receive_have_queue:
-                    payload = peer_obj.receive_have_queue.pop()
-                    if self.left == 0: continue
-                    try:
-                        filepath = payload.get('filepath')
-                        piece_index = payload.get('piece_index')
-                        # print(f"REC: Received have message for file {filepath} with piece index {piece_index} from peer with ID: {peer_obj.ID}")
-                        if filepath and piece_index is not None and payload in self.chunks_left:
-                            peer_obj.add_chunk(payload)
-                    except Exception as e:
-                        print(f"ERROR: Failed to process have message: {e}")
-                while peer_obj.receive_request_queue:
-                    payload = peer_obj.receive_request_queue.pop()
-                    if not isinstance(payload, dict) or 'filepath' not in payload or 'piece_index' not in payload:
-                        print("ERROR: Invalid payload format received.")
-                        # Ignore invalid payloads
-                    else:
-                        #print(f"REC: Received request message for file {payload.get('filepath')} with piece index {payload.get('piece_index')}")
-                        filepath = payload.get('filepath')
-                        piece_index = payload.get('piece_index')
-                        with peer_obj.queue_send_lock:
-                            peer_obj.piece_queue.append((payload, filepath, piece_index))
-                while peer_obj.receive_piece_queue:
-                    payload = peer_obj.receive_piece_queue.pop()               
-                    filepath = payload['filepath']
-                    piece_index = payload['piece_index']
-                    chunk_data = payload['chunk_data']
-                    #print("REC: Received message for piece index", piece_index, "from peer with ID:", peer_obj.ID)
-                    if chunk_data is None or chunk_data == b'':
-                        continue
-
-                    # Get payload info
-                    chunk_metadata = {key: payload[key] for key in ['filepath', 'piece_index']}
-                    have = False
-                    with self.general_update_lock:
-                        if chunk_metadata in self.chunks_left:
-                            have = True
-                            self.save_chunk_to_local_storage(filepath, piece_index, chunk_data)
-                            
-                            self.downloaded += 1 #here we download the whole piece
-                            self.chunks_downloaded.append(chunk_metadata)
-                            self.left -= 1
-                            self.chunks_left.remove(chunk_metadata)
-
-                    if have:
-                        if peer_obj.ID not in self.count:  #doesnt need a lock since it is only accessed by this thread
-                            self.count[peer_obj.ID] = 1
+            with peer_obj.session_lock:
+                with peer_obj.queue_receive_lock:
+                    # print('piece queue for peer with ID:', peer_obj.ID, 'have size:', len(peer_obj.receive_piece_queue))
+                    while peer_obj.receive_control_queue:
+                        payload, message_type = peer_obj.receive_control_queue.pop()
+                        # print('received', message_type, 'message from peer with ID:', peer_obj.ID)
+                        if message_type == 'keep-alive': pass
+                        elif message_type == 'choke':
+                            # print('REC: Received choke message from peer with ID:', peer_obj.ID)
+                            peer_obj.update_receive_status(State.peer_choking)
+                        elif message_type == 'unchoke':
+                            peer_obj.update_receive_status(State.peer_interested)
+                            # print('REC: Received unchoke message from peer with ID:', peer_obj.ID)
+                        elif message_type == 'interested':
+                            # print('REC: Received interested message from peer with ID:', peer_obj.ID)
+                            unchoke_message = messParser.construct_unchoke()
+                            message_queue.append(unchoke_message)
+                            peer_obj.update_send_status(State.am_interested)
                         else:
-                            self.count[peer_obj.ID] += 1
+                            # print('REC: Received not interested message from peer with ID:', peer_obj.ID)
+                            choke_message = messParser.construct_choke()
+                            message_queue.append(choke_message)
+                            peer_obj.update_send_status(State.am_choking)
 
-                        have_message = messParser.construct_have(filepath, piece_index)
+                with peer_obj.queue_send_lock:
+                    peer_obj.control_queue += message_queue
+                    message_queue.clear()
+
+                with peer_obj.queue_receive_lock:
+                    while peer_obj.receive_have_queue:
+                        payload = peer_obj.receive_have_queue.pop()
+                        if self.left == 0: continue
+                        try:
+                            filepath = payload.get('filepath')
+                            piece_index = payload.get('piece_index')
+                            # print(f"REC: Received have message for file {filepath} with piece index {piece_index} from peer with ID: {peer_obj.ID}")
+                            if filepath and piece_index is not None and payload in self.chunks_left:
+                                peer_obj.add_chunk(payload)
+                        except Exception as e:
+                            print(f"ERROR: Failed to process have message: {e}")
+                with peer_obj.queue_receive_lock:
+                    while peer_obj.receive_request_queue:
+                        payload = peer_obj.receive_request_queue.pop()
+                        if not isinstance(payload, dict) or 'filepath' not in payload or 'piece_index' not in payload:
+                            print("ERROR: Invalid payload format received.")
+                            # Ignore invalid payloads
+                        else:
+                            #print(f"REC: Received request message for file {payload.get('filepath')} with piece index {payload.get('piece_index')}")
+                            filepath = payload.get('filepath')
+                            piece_index = payload.get('piece_index')
+                            message_queue.append((payload, filepath, piece_index))
+
+                with peer_obj.queue_send_lock:    
+                    peer_obj.piece_queue += message_queue
+                    message_queue.clear()
+
+                with peer_obj.queue_receive_lock:
+                    while peer_obj.receive_piece_queue:
+                        payload = peer_obj.receive_piece_queue.pop()               
+                        filepath = payload['filepath']
+                        piece_index = payload['piece_index']
+                        chunk_data = payload['chunk_data']
+                        #print("REC: Received message for piece index", piece_index, "from peer with ID:", peer_obj.ID)
+                        if chunk_data is None or chunk_data == b'':
+                            continue
+
+                        # Get payload info
+                        chunk_metadata = {key: payload[key] for key in ['filepath', 'piece_index']}
+                        have = False
                         with self.general_update_lock:
-                            for peer in self.peer_list:
-                                if peer.sock is not None and peer_obj.ID != peer.ID:
-                                    with peer.queue_send_lock:
-                                        peer.control_queue.append(have_message)  # Send have message to all peers except the sender
-                                with peer.available_lock:
-                                    if chunk_metadata in peer.available_chunks:
-                                        peer.available_chunks.remove(chunk_metadata) 
+                            if chunk_metadata in self.chunks_left:
+                                have = True
+                                self.save_chunk_to_local_storage(filepath, piece_index, chunk_data)
+                                
+                                self.downloaded += 1 #here we download the whole piece
+                                self.chunks_downloaded.append(chunk_metadata)
+                                self.left -= 1
+                                self.chunks_left.remove(chunk_metadata)
 
-                        peer_obj.Update_chunks_downloaded()
+                        if have:
+                            if peer_obj.ID not in self.count:  #doesnt need a lock since it is only accessed by this thread
+                                self.count[peer_obj.ID] = 1
+                            else:
+                                self.count[peer_obj.ID] += 1
 
-                        # for neighbour_peer in self.peer_list:
-                        #     with neighbour_peer.available_lock:
-                        #         if chunk_metadata in neighbour_peer.available_chunks:
-                        #             neighbour_peer.available_chunks.remove(chunk_metadata) 
+                            have_message = messParser.construct_have(filepath, piece_index)
+                            message_queue.append(have_message)
+                            meta_data_list.append(chunk_metadata)
 
-                        if self.left == 0:
-                            print("REC: Download complete")
-                            #Make a HTTP GET request to the tracker with the event 'completed'
+                            peer_obj.Update_chunks_downloaded()
 
-                            params = {
-                            "info_hash": self.info_hash,
-                            "ip": "127.0.0.1",  # Your IP address
-                            "peer_id": self.peer_id,  #Assign a unique peer ID
-                            "port": self.port,  # Port your client listens on for incoming peer connections
-                            "downloaded": self.downloaded,
-                            # "downloaded": self.downloaded,
-                            "left": self.left,  # Placeholder for the amount left to download
-                            # "compact": 1, #reserved for future use
-                            "event": "completed"
-                            }
-                            
-                            response = requests.get(self.URL, params=params)
-                            self.chunks_downloaded.sort(key=lambda x: x['piece_index'])
-                            print(f"Downloaded pieces: {len(self.chunks_downloaded)}, duplicates: {self.duplicate}")
-                            #print('sorted Downloaded:', self.chunks_downloaded, 'length:', len(self.chunks_downloaded))
-                            print('number of pieces for each peer:', self.count)
-                            for peer in self.peer_list:
-                                print("available chunks for peer with ID:", peer.ID," ", peer.available_chunks)
-                            
-    
-                    else:
-                        with self.duplicate_lock:
-                            self.duplicate += 1
-                        
+                            # for neighbour_peer in self.peer_list:
+                            #     with neighbour_peer.available_lock:
+                            #         if chunk_metadata in neighbour_peer.available_chunks:
+                            #             neighbour_peer.available_chunks.remove(chunk_metadata)
+                                
+                        else:
+                            with self.duplicate_lock:
+                                self.duplicate += 1
+            
+            with self.general_update_lock:
+                peer_copy = self.peer_list #reference to the peer list, because update is to be reflected in the peer list
+
+            with peer_obj.session_lock:
+                for peer in peer_copy:
+                    if peer.sock is not None and peer_obj.ID != peer.ID:
+                        with peer.queue_send_lock:
+                            peer.have_queue += message_queue  # Send have message to all peers except the sender
+                    set_meta_data = {frozenset(d.items()) for d in meta_data_list}
+                    with peer.available_lock:
+                        peer.available_chunks = [
+                            x for x in peer.available_chunks if frozenset(x.items()) not in set_meta_data
+                        ]
+            
+            with self.general_update_lock:
+                if not self.completed and self.left == 0:
+                    self.completed = True
+                    print("REC: Download complete")
+                    #Make a HTTP GET request to the tracker with the event 'completed'
+
+                    params = {
+                    "info_hash": self.info_hash,
+                    "ip": "127.0.0.1",  # Your IP address
+                    "peer_id": self.peer_id,  #Assign a unique peer ID
+                    "port": self.port,  # Port your client listens on for incoming peer connections
+                    "downloaded": self.downloaded,
+                    # "downloaded": self.downloaded,
+                    "left": self.left,  # Placeholder for the amount left to download
+                    # "compact": 1, #reserved for future use
+                    "event": "completed"
+                    }
+                    
+                    response = requests.get(self.URL, params=params)
+                    self.chunks_downloaded.sort(key=lambda x: x['piece_index'])
+                    print(f"Downloaded pieces: {len(self.chunks_downloaded)}, duplicates: {self.duplicate}")
+                    #print('sorted Downloaded:', self.chunks_downloaded, 'length:', len(self.chunks_downloaded))
+                    print('number of pieces for each peer:', self.count)
+                    for peer in self.peer_list:
+                        print("available chunks for peer with ID:", peer.ID," ", peer.available_chunks)
+            
+            message_queue.clear()
+            meta_data_list.clear()
+
+
                 # else:       been here a long time
                 #     print("REC: Received unknown message", payload)
             
@@ -805,8 +841,8 @@ class Peer:
 
         with self.general_update_lock: #to synchronize the chunks_downloaded with have messages
             self.peer_list.append(new_neighbour)
-            if len(self.unchoked_peer) <= self.max_unchoked_peers:  #account for the extra unchoked peer
-                self.unchoked_peer.append(new_neighbour)
+            # if len(self.unchoked_peer) <= self.max_unchoked_peers:  #account for the extra unchoked peer
+            #     self.unchoked_peer.append(new_neighbour)
 
             #send available chunks along with protocol message
             # pstrlen = 19                #The same signature for the protocol
@@ -978,7 +1014,7 @@ class Peer:
 
             with self.general_update_lock:
                 self.peer_list = peers
-                self.unchoked_peer = self.peer_list[:min(self.max_unchoked_peers + 1, len(self.peer_list))] 
+                #self.unchoked_peer = self.peer_list[:min(self.max_unchoked_peers + 1, len(self.peer_list))] 
         
         except json.JSONDecodeError:
             print("Failed to decode JSON response")
@@ -1175,7 +1211,7 @@ class Peer:
             reserved = b"\x00" * 8
             # Final message includes protocol info and packed piece info
             send_data = struct.pack("!B", pstrlen) + pstr + reserved + str(self.info_hash).encode() + packed_data
-            print(f"SEND DATA: {send_data}")
+            print(f"SEND DATA: {send_data} \n\n\n")
             self.send_all(peer_socket, send_data)
             # with self.general_update_lock:
             #     send_data = struct.pack("!B", pstrlen) + pstr + reserved + str(self.info_hash).encode() + struct.pack(f'!{len(self.chunks_downloaded)}I', *self.chunks_downloaded)
@@ -1194,12 +1230,12 @@ class Peer:
             print(f"INFO: Seeder initialized with {len(self.chunks_downloaded)} pieces.")
             # print(self.chunks_downloaded)
             accept_thread = Thread(target=self.Accepting_request).start()    #This should start as a thread
-            tit_for_tat = Thread(target=self.Tit_for_tat).start()
+            # tit_for_tat = Thread(target=self.Tit_for_tat).start()
             self.Connect_torrent()
         elif message == 'client1':
             print(f"INFO: Client initialized with {len(self.chunks_left)} remaining chunks.")
             accept_thread = Thread(target=self.Accepting_request).start()    #This should start as a thread
-            tit_for_tat = Thread(target=self.Tit_for_tat).start()
+            # tit_for_tat = Thread(target=self.Tit_for_tat).start()
             # Connect to the tracker and peers
             print(f"INFO: Connecting to tracker at {self.URL}...")
             self.Connect_torrent()
@@ -1240,7 +1276,7 @@ port = input('port ')
 if port == '1122': seeder = True
 else: seeder = False    
 
-a = Peer(int(port), 'torrents/ubuntu-22.04.4-desktop-amd64.iso.torrent.json', seeder)
+a = Peer(int(port), 'torrents/postgresql-17.0-1-windows-x64.exe.torrent.json', seeder)
 a.Main()
 
 

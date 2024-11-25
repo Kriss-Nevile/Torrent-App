@@ -44,6 +44,8 @@ class Neighbour_Peer:
         self.queue_receive_lock = Lock()
         self.download_rate_lock = Lock()
         self.is_mod = False
+        self.in_rec_session = False
+        self.session_lock = Lock()
         
         self.send_closes = False
 
@@ -53,6 +55,13 @@ class Neighbour_Peer:
         self.last_time = time.time()
         self.download_rate = 0
 
+    def toggle_rec_session(self):
+        with self.session_lock:
+            self.in_rec_session = not self.in_rec_session
+    
+    def is_rec_session(self):
+        with self.session_lock:
+            return self.in_rec_session
 
     def __repr__(self):
         return self.__str__()
