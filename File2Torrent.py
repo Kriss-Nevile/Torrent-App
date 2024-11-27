@@ -77,6 +77,6 @@ def save_torrent_json(directory, output_filename):
 
 
 # Example usage:
-directory = "JavaCodingPack-0.4.2.exe"
-file_name = os.path.basename(directory)
-save_torrent_json(directory, f"torrents/{file_name}.torrent.json")
+# directory = "JavaCodingPack-0.4.2.exe"
+# file_name = os.path.basename(directory)
+# save_torrent_json(directory, f"torrents/{file_name}.torrent.json")

@@ -20,7 +20,7 @@ from config import timestamped_print as print
 
 
 PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
-OUTPUT_DIR = 'download' 
+# OUTPUT_DIR = 'downloadeds' 
 
 
 # Currently the peer supports up to 20 neighbouring peers
@@ -93,9 +93,9 @@ class Peer:
         self.alive = True
         self.peer_id = self.peer_id = datetime.now().strftime("%H%M%S%f") + str(random.randint(10000000, 99999999)) #generate a unique peer id
         self.info_hash = None #20 bytes
-        # self.max_unchoked_peers = 5
+        self.max_unchoked_peers = 4 #doesnt include the random one
         self.peer_list = []
-        # self.unchoked_peer = [] #we're implementing 4 + 1 algorithm
+        self.unchoked_peer = [] #we're implementing 4 + 1 algorithm
         #self.peer_list.append(Neighbour_Peer('localhost', self.port, 'self_peer')) #for testing purposes
         self.uploaded = 0
         self.downloaded = 0 #number of bytes downloaded
@@ -114,6 +114,8 @@ class Peer:
         self.send_track = set()
         self.send_track_lock = Lock()
         self.local_storage = []
+        self.start_time = time.time() #track total execution time
+        self.total_execution_time = 0
 
         # Torrent data:
         self.piece_length = PIECE_SIZE  # default
@@ -211,12 +213,12 @@ class Peer:
 
                 stop = True
                 for request in requests:
-                    if self.In_set(request['piece_index']): continue
+                    if self.In_set((request['piece_index'], request['filepath'])): continue
                     stop = False
                     request_message = messParser.construct_request(request['filepath'], request['piece_index'])
                     with peer_obj.queue_send_lock:
                         peer_obj.request_queue.append(request_message)
-                    self.add_to_set(request['piece_index'])
+                    self.add_to_set((request['piece_index'], request['filepath']))
                     
                 # if not stop: print('request for peer with ID:', peer_obj.ID,' was sent') 
 
@@ -247,33 +249,36 @@ class Peer:
 
 
     #implement 4 + 1 peer selection algorithm
-    # def Tit_for_tat(self): 
-    #     while self.Check_alive():
-    #         # Sort peers based on the number of pieces they have sent
-    #         remove = []
-    #         with self.general_update_lock: 
-    #             if len(self.peer_list) > self.max_unchoked_peers + 1:
-    #                 for peer in self.peer_list: peer.toggle_modifying()
+    def Tit_for_tat(self): 
+        while self.Check_alive():
+            # Sort peers based on the number of pieces they have sent
+            remove = []
+            with self.general_update_lock: 
+                if len(self.peer_list) > self.max_unchoked_peers + 1:
+                    for peer in self.peer_list: peer.toggle_modifying()
 
-    #                 self.peer_list.sort(reverse=True)
-    #                 new_peers = self.peer_list[:self.max_unchoked_peers]
-    #                 if self.peer_list[self.max_unchoked_peers:]:
-    #                     new_peers += random.sample(self.peer_list[self.max_unchoked_peers:], 1)
-    #                 for peers in self.unchoked_peer:
-    #                     if peers not in new_peers:
-    #                         remove.append(peers)
+                    self.peer_list.sort(reverse=True)
+                    new_peers = self.peer_list[:self.max_unchoked_peers]
+                    if self.peer_list[self.max_unchoked_peers:]:
+                        new_peers += random.sample(self.peer_list[self.max_unchoked_peers:], 1)
+                    for peers in self.unchoked_peer:
+                        if peers not in new_peers:
+                            remove.append(peers)
 
-    #                 self.unchoked_peer = new_peers
+                    self.unchoked_peer = new_peers
+                    #move 4 top peers to back of list
+                    self.peer_list = self.peer_list[self.max_unchoked_peers:] + self.peer_list[:self.max_unchoked_peers]
+                    #to avoid extreme cases where new peers are not selected
 
-    #                 for peer in self.peer_list: peer.toggle_modifying()  
-    #                 print('new unchoked peers after tit for tat', self.unchoked_peer)
+                    for peer in self.peer_list: peer.toggle_modifying()  
+                    print('new unchoked peers after tit for tat', self.unchoked_peer)
             
-    #         for peer in remove:
-    #             peer.update_send_status(State.am_choking)
-    #             with peer.queue_send_lock:
-    #                 peer.control_queue.append(messParser.construct_choke())
+            for peer in remove:
+                peer.update_send_status(State.am_choking)
+                with peer.queue_send_lock:
+                    peer.control_queue.append(messParser.construct_choke())
 
-    #         time.sleep(15)  # Re-evaluate every 15 seconds
+            time.sleep(15)  # Re-evaluate every 15 seconds
         
 
 
@@ -374,8 +379,9 @@ class Peer:
                     chunk_data = None
                     if piece_path is not None:
                         piece_path = os.path.join(file_obj.output_directory, piece_path)
-                        with open(piece_path, 'rb') as chunk_file:
-                            chunk_data = chunk_file.read()
+                        if os.path.exists(piece_path):
+                            with open(piece_path, 'rb') as chunk_file:
+                                chunk_data = chunk_file.read()
 
                     if chunk_data is None: pass
                         #print(f"INFO: Chunk for file '{filepath}', index {piece_index} not yet verified in local storage from")
@@ -468,7 +474,7 @@ class Peer:
                         elif message_type == 'unchoke':
                             peer_obj.update_receive_status(State.peer_interested)
                             # print('REC: Received unchoke message from peer with ID:', peer_obj.ID)
-                        elif message_type == 'interested':
+                        elif peer_obj in self.unchoked_peer and message_type == 'interested':
                             # print('REC: Received interested message from peer with ID:', peer_obj.ID)
                             unchoke_message = messParser.construct_unchoke()
                             message_queue.append(unchoke_message)
@@ -572,6 +578,7 @@ class Peer:
             with self.general_update_lock:
                 if not self.completed and self.left == 0:
                     self.completed = True
+                    self.total_execution_time = time.time() - self.start_time
                     print("DOWNLOAD COMPLETED -- NOW SEEDING")
                     #Make a HTTP GET request to the tracker with the event 'completed'
 
@@ -702,6 +709,21 @@ class Peer:
                                 if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
                                     self.chunks_left.append({"filepath": filepath, "piece_index": piece["index"]})
                     
+                    
+                    
+                    self.load_local_storage()
+                    print('----------------------------------------------------')
+                    for file in self.local_storage:
+                        print(file.filepath)
+                    print('----------------------------------------------------')
+                    print(self.chunks_left)
+                    print('----------------------------------------------------')
+                    print(self.chunks_downloaded)
+                    print('----------------------------------------------------')
+                    print(len(self.chunks_downloaded))
+                    print('----------------------------------------------------')
+
+                    self.downloaded = len(self.chunks_downloaded)
                     self.left = len(self.chunks_left)
                     print(f"INFO: Total chunks to download: {self.left}.")
                     return True
@@ -868,8 +890,8 @@ class Peer:
 
         with self.general_update_lock: #to synchronize the chunks_downloaded with have messages
             self.peer_list.append(new_neighbour)
-            # if len(self.unchoked_peer) <= self.max_unchoked_peers:  #account for the extra unchoked peer
-            #     self.unchoked_peer.append(new_neighbour)
+            if len(self.unchoked_peer) <= self.max_unchoked_peers:  #account for the extra unchoked peer
+                self.unchoked_peer.append(new_neighbour)
 
             #send available chunks along with protocol message
             # pstrlen = 19                #The same signature for the protocol
@@ -1041,7 +1063,7 @@ class Peer:
 
             with self.general_update_lock:
                 self.peer_list = peers
-                #self.unchoked_peer = self.peer_list[:min(self.max_unchoked_peers + 1, len(self.peer_list))] 
+                self.unchoked_peer = self.peer_list[:min(self.max_unchoked_peers + 1, len(self.peer_list))] 
         
         except json.JSONDecodeError:
             print("Failed to decode JSON response")
@@ -1084,14 +1106,30 @@ class Peer:
                 # Construct the base file path
                 file_path = os.path.join(file_obj.output_directory, file_obj.filepath)
 
-                # Load chunks from saved files
-                for i in range(len(file_obj.pieces_list)):
-                    piece_path = file_path + f'_{i}'
-                    if os.path.exists(piece_path):
-                        # with open(piece_path, 'rb') as chunk_file:
+                if os.path.exists(file_path):
+                    # Load chunks from saved files
+                    for i in range(len(file_obj.pieces_list)):
+                        piece_path = file_path + f'_{i}'
                         file_obj.verified_pieces_data[i] = str(piece_path)
-                        # os.remove(piece_path)  # Remove the chunk file after loading
-                        print(f"INFO: Loaded chunk {i} of file '{file_obj.filepath}' from '{piece_path}'.")
+                        # Remove payloay if exists in chunk_left
+                        if {"filepath": file_obj.filepath, "piece_index": i} in self.chunks_left:
+                            self.chunks_left.remove({"filepath": file_obj.filepath, "piece_index": i})
+                            self.chunks_downloaded.append({"filepath": file_obj.filepath, "piece_index": i})
+                    print(f"INFO: Loaded file '{file_obj.filepath}' from {file_path}.")
+                else:
+                    # Load chunks from saved pieces
+                    for i in range(len(file_obj.pieces_list)):
+                        piece_path = file_path + f'_{i}'
+
+                        if os.path.exists(piece_path):
+                            file_obj.verified_pieces_data[i] = str(piece_path)
+                            # Remove payloay if exists in chunk_left
+                            if {"filepath": file_obj.filepath, "piece_index": i} in self.chunks_left:
+                                self.chunks_left.remove({"filepath": file_obj.filepath, "piece_index": i})
+                                self.chunks_downloaded.append({"filepath": file_obj.filepath, "piece_index": i})
+                            print(f"INFO: Loaded chunk {i} of file '{file_obj.filepath}' from '{piece_path}'.")
+                        
+
                     # else:
                     #     print(f"WARNING: Chunk file '{piece_path}' not found. Assuming missing chunk.")
                     
@@ -1114,6 +1152,7 @@ class Peer:
     # May change in the future
     def connect_to_peers(self):
         threads = []
+        self.start_time = time.time() #the start time is when the client starts to connect to the peers
         for instance in reversed(self.peer_list):
             try:
                 peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1279,18 +1318,24 @@ class Peer:
 
     
     def Main(self):
+        print('chunks left:', self.left)
         print('start the peer main thread')
         input('ready?')
         if self.seeder:
             accept_thread = Thread(target=self.Accepting_request)
             accept_thread.start()
+            tit_for_tat = Thread(target=self.Tit_for_tat)
+            tit_for_tat.start()
             self.Connect_torrent()  # a seeder doesnt need to connect to other peers, i'll also send a completed event to the tracker
             input('turn off?')
             self.Exit_torrent()
             accept_thread.join()
+            tit_for_tat.join()
         else:
             accept_thread = Thread(target=self.Accepting_request)
             accept_thread.start()
+            tit_for_tat = Thread(target=self.Tit_for_tat)
+            tit_for_tat.start()
             self.Connect_torrent()
             if self.peer_list:
                 self.connect_to_peers()
@@ -1299,16 +1344,17 @@ class Peer:
             input('turn off?')
             self.Exit_torrent()
             accept_thread.join()
+            tit_for_tat.join()
     
         print('The connection to torrent:', self.torrent_file, 'is closed')
 
 
-# port = input('port ')
-# if port == '1122': seeder = True
-# else: seeder = False    
+port = input('port ')
+if port == '1122': seeder = True
+else: seeder = False    
 
-# a = Peer(int(port), 'torrents/postgresql-17.0-1-windows-x64.exe.torrent.json', seeder)
-# a.Main()
+a = Peer(int(port), 'torrents/Multi_Test.torrent.json', seeder)
+a.Main()
 
 
 
