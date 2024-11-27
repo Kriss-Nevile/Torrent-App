@@ -1,8 +1,11 @@
 import hashlib
 import os
 import json
+import config
 
-from config import PIECE_SIZE, TRACKER_URL
+
+PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
+
 
 def generate_magnet_text(metainfo_file):
     with open(metainfo_file, "rb") as file:

@@ -4,7 +4,10 @@ import time
 from threading import Thread, Lock, Condition
 from queue import Queue
 import psutil
+import config
 
+
+PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
 
 
 class State(Enum):
@@ -106,6 +109,10 @@ class Neighbour_Peer:
     def Check_alive(self):
         with self.live_lock:
             return self.is_alive
+    
+    def Turn_off(self):
+        with self.live_lock:
+            self.is_alive = False
 
     def Check_send_status(self):
         with self.send_lock:
@@ -140,12 +147,16 @@ class Neighbour_Peer:
             self.chunks_downloaded += 1
 
     def toggle_modifying(self):
-        with self.download_rate_lock:
+        with self.download_rate_lock:        #reserved for 4 + 1 implementation
             self.is_mod = not self.is_mod
 
     def is_mofifying(self):
         with self.download_rate_lock:
             return self.is_mod
+    
+    def current_download_rate(self):
+        with self.download_rate_lock:
+            return self.download_rate
     
     def __lt__(self, other):
         return self.download_rate < other.download_rate
@@ -180,11 +191,11 @@ def Download_rate(neighbour_peer: Neighbour_Peer):
             time.sleep(0.1)
         with neighbour_peer.download_rate_lock:
             Download_rate = neighbour_peer.chunks_downloaded / (time.time() - neighbour_peer.last_time)
-            neighbour_peer.download_rate = Download_rate
+            neighbour_peer.download_rate = Download_rate * PIECE_SIZE / (1024 * 1024) #in MB/s
             neighbour_peer.last_time = time.time()
             neighbour_peer.chunks_downloaded = 0
         
-        print('Download rate for peer with ID: ', neighbour_peer.ID, 'is: ', Download_rate)
+        print('Download rate for peer with ID: ', neighbour_peer.ID, 'is: ', Download_rate, 'MB/s')
         time.sleep(3) #update every 5 seconds
     
     print('Download rate closed for peer with ID: ', neighbour_peer.ID)

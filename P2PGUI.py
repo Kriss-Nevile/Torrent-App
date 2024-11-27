@@ -1,102 +1,203 @@
+import threading
+import select
+from Peer import Peer
 import tkinter as tk
-from tkinter import ttk, filedialog
+import os
+import File2Torrent
+import random
+import config
+from tkinter import filedialog, messagebox
 
-# Function to handle file browsing
-def browse_file():
-    file_path = filedialog.askopenfilename()
-    if file_path:
-        file_label.config(text=file_path)
+# Assuming File2Torrent, Peer, config, and other components are implemented elsewhere.
+used_ports = set()
+used_ports.add(1121)
 
-# Function to display stats for the selected torrent
-def display_stats(event):
-    try:
-        # Get the selected torrent based on the listbox
-        selected_index = torrent_listbox.curselection()[0]
-        selected_torrent = torrent_listbox.get(selected_index)
-        stats_label.config(text=f"Stats for: {selected_torrent}")
-    except IndexError:
-        pass
 
-# Main application window
-root = tk.Tk()
-root.title("P2P App")
-root.geometry("800x600")
+def generate_random_port():
+    return random.randint(1024, 65535)
 
-# Top section: File search and browse
-search_frame = tk.Frame(root, padx=10, pady=10)
-search_frame.pack(fill="x")
+def get_unique_port():
+    while True:
+        port = generate_random_port()
+        if port not in used_ports:
+            used_ports.add(port)
+            return port
 
-search_entry = tk.Entry(search_frame, width=50, font=("Arial", 14))
-search_entry.pack(side="left", fill="x", expand=True)
+class TorrentGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Torrent Client GUI")
+        
+        self.torrent_array = []  # Store torrent paths
+        self.torrent_peer = {}   # Store torrent-peer mapping
 
-browse_button = tk.Button(search_frame, text="Browse", command=browse_file, font=("Arial", 12))
-browse_button.pack(side="left", padx=5)
+        # Frame to hold the buttons horizontally
+        button_frame = tk.Frame(root)
+        button_frame.pack(pady=40)
 
-file_label = tk.Label(root, text="The name of chosen file", font=("Arial", 12), anchor="w")
-file_label.pack(fill="x", padx=10, pady=(5, 10))
+        # Buttons for main commands added to the frame
+        tk.Button(button_frame, text="Create Torrent", command=self.create_torrent).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Select Torrent", command=self.select_torrent).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Connect", command=self.connect_torrent).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Config", command=self.configure).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Exit Torrent", command=self.exit_torrent).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Show Statistics", command=self.show_statistics).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Clear Screen", command=self.clear_screen).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Exit Program", command=self.exit_program).pack(side=tk.LEFT, padx=5)
 
-# Middle section: Torrent list and stats
-content_frame = tk.Frame(root, padx=10, pady=10)
-content_frame.pack(fill="both", expand=True)
+        # Output area
+        self.output = tk.Text(root, height=25, width=100, state=tk.DISABLED)
+        self.output.pack(pady=5)
 
-# Left: Torrent list with progress bars
-torrent_list_frame = tk.Frame(content_frame)
-torrent_list_frame.pack(side="left", fill="y", padx=10, pady=10)
 
-torrent_list_label = tk.Label(torrent_list_frame, text="Torrents in download", font=("Arial", 12))
-torrent_list_label.pack(anchor="w")
 
-# Scrollable frame for torrents
-torrent_canvas = tk.Canvas(torrent_list_frame)
-scrollbar = ttk.Scrollbar(torrent_list_frame, orient="vertical", command=torrent_canvas.yview)
-scrollable_frame = tk.Frame(torrent_canvas)
+    def log(self, message):
+        """Display message in the output area."""
+        self.output.config(state=tk.NORMAL)
+        self.output.insert(tk.END, message + "\n")
+        self.output.config(state=tk.DISABLED)
 
-scrollable_frame.bind(
-    "<Configure>",
-    lambda e: torrent_canvas.configure(scrollregion=torrent_canvas.bbox("all"))
-)
+    def create_torrent(self):
+        """Handle torrent creation."""
+        path = filedialog.askdirectory(title="Select File or Directory")
+        if not path:
+            self.log("No path selected for torrent creation.")
+            return
+        output_filename = filedialog.asksaveasfilename(title="Save Torrent As", defaultextension=".json")
+        if not output_filename:
+            self.log("No output filename provided.")
+            return
+        File2Torrent.save_torrent_json(path, output_filename)
+        self.log(f"Torrent created: {output_filename}")
 
-torrent_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-torrent_canvas.configure(yscrollcommand=scrollbar.set)
+    def select_torrent(self):
+        """Select a torrent file."""
+        path = filedialog.askopenfilename(title="Select Torrent File", filetypes=[("Torrent Files", "*.json")])
+        if not path:
+            self.log("No torrent file selected.")
+            return
+        if os.path.exists(path):
+            self.torrent_array.append(path)
+            self.log(f"Torrent selected: {path}")
+        else:
+            self.log("File does not exist.")
 
-torrent_canvas.pack(side="left", fill="both", expand=True)
-scrollbar.pack(side="right", fill="y")
+    def connect_torrent(self):
+        """Connect to a torrent."""
+        if not self.torrent_array:
+            self.log("No torrents available. Please select one first.")
+            return
 
-# Add torrents with progress bars and make them selectable
-torrent_data = {}
-torrent_listbox = tk.Listbox(scrollable_frame, height=0)  # Listbox for tracking selections
-torrent_listbox.pack_forget()  # Hidden but used to bind selection events
+        torrent_index = self.select_from_list(self.torrent_array, "Select a Torrent")
+        if torrent_index is None:
+            self.log("No torrent selected.")
+            return
 
-for i in range(1, 11):
-    frame = tk.Frame(scrollable_frame, pady=5)
-    frame.pack(fill="x", padx=5)
+        peer_type = messagebox.askquestion("Peer Type", "Is this a seeder? (Yes for Seeder, No for Peer)")
+        port = get_unique_port()
+        torrent = self.torrent_array[torrent_index]
+        
+        if peer_type == 'yes':
+            peer = Peer(port, torrent, True)
+        else:
+            peer = Peer(port, torrent, False)
 
-    torrent_label = tk.Label(frame, text=f"Torrent_{i}", font=("Arial", 10), anchor="w")
-    torrent_label.pack(side="left", fill="x", expand=True)
+        self.torrent_peer[torrent] = peer
+        threading.Thread(target=peer.Main).start()
+        self.log(f"Connected to torrent: {torrent}")
 
-    progress = ttk.Progressbar(frame, length=300, mode="determinate")
-    progress.pack(side="right", fill="x", expand=True)
-    progress["value"] = i * 10  # Dummy progress value
-    torrent_data[f"Torrent_{i}"] = progress
+    def configure(self):
+        """View or modify configurations."""
+        config_window = tk.Toplevel(self.root)
+        config_window.title("Configurations")
 
-    # Add the torrent to the listbox for selection
-    torrent_listbox.insert("end", f"Torrent_{i}")
-    torrent_label.bind("<Button-1>", lambda e, index=i: select_torrent(index - 1))  # Allow selection on label click
+        # Display current configurations
+        PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
+        tk.Label(config_window, text=f"PIECE_SIZE: {PIECE_SIZE}").pack()
+        tk.Label(config_window, text=f"OUTPUT_DIR: {OUTPUT_DIR}").pack()
+        tk.Label(config_window, text=f"TRACKER_URL: {TRACKER_URL}").pack()
 
-def select_torrent(index):
-    torrent_listbox.select_clear(0, "end")
-    torrent_listbox.select_set(index)
-    torrent_listbox.event_generate("<<ListboxSelect>>")
+        def update_config(option, label):
+            value = tk.simpledialog.askstring("Update Config", f"Enter new value for {label}:")
+            if value:
+                config.write_config(option, value)
+                self.log(f"Updated {label} to {value}")
 
-# Bind listbox selection to the stats display
-torrent_listbox.bind("<<ListboxSelect>>", display_stats)
+        tk.Button(config_window, text="Update PIECE_SIZE", command=lambda: update_config(1, "PIECE_SIZE")).pack(pady=3)
+        tk.Button(config_window, text="Update OUTPUT_DIR", command=lambda: update_config(2, "OUTPUT_DIR")).pack(pady=3)
+        tk.Button(config_window, text="Update TRACKER_URL", command=lambda: update_config(3, "TRACKER_URL")).pack(pady=3)
 
-# Right: Stats display
-stats_frame = tk.Frame(content_frame, padx=10)
-stats_frame.pack(side="right", fill="both", expand=True)
+    def exit_torrent(self):
+        """Stop a torrent."""
+        if not self.torrent_array:
+            self.log("No torrents available to stop.")
+            return
 
-stats_label = tk.Label(stats_frame, text="Stats for selected torrent", font=("Arial", 12), anchor="w", wraplength=200, justify="left")
-stats_label.pack(fill="both", expand=True)
+        torrent_index = self.select_from_list(self.torrent_array, "Select a Torrent to Stop")
+        if torrent_index is None:
+            self.log("No torrent selected.")
+            return
 
-# Start the application
-root.mainloop()
+        torrent = self.torrent_array[torrent_index]
+        peer = self.torrent_peer.get(torrent)
+        if peer:
+            peer.Turn_off()
+            del self.torrent_peer[torrent]
+            self.log(f"Torrent stopped: {torrent}")
+        else:
+            self.log("Torrent is not active.")
+
+    def show_statistics(self):
+        """Show statistics for a torrent."""
+        if not self.torrent_array:
+            self.log("No torrents available.")
+            return
+
+        torrent_index = self.select_from_list(self.torrent_array, "Select a Torrent for Statistics")
+        if torrent_index is None:
+            self.log("No torrent selected.")
+            return
+
+        torrent = self.torrent_array[torrent_index]
+        peer = self.torrent_peer.get(torrent)
+        if peer:
+            peer.Get_Peer_Speed_Info()
+        else:
+            self.log("Torrent is not active.")
+
+    def clear_screen(self):
+        """Clear the output area."""
+        self.output.config(state=tk.NORMAL)
+        self.output.delete(1.0, tk.END)
+        self.output.config(state=tk.DISABLED)
+
+    def exit_program(self):
+        """Exit the application."""
+        for torrent, peer in self.torrent_peer.items():
+            peer.Turn_off()
+        self.root.destroy()
+
+    def select_from_list(self, options, title):
+        """Display a selection dialog and return the selected index."""
+        if not options:
+            return None
+        selection_window = tk.Toplevel(self.root)
+        selection_window.title(title)
+
+        selected = tk.IntVar(value=-1)
+
+        for i, option in enumerate(options):
+            tk.Radiobutton(selection_window, text=option, variable=selected, value=i).pack(anchor='w')
+
+        def confirm():
+            selection_window.destroy()
+
+        tk.Button(selection_window, text="Confirm", command=confirm).pack()
+        self.root.wait_window(selection_window)
+        return selected.get()
+
+# Create the main window
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TorrentGUI(root)
+    root.mainloop()
