@@ -201,6 +201,7 @@ class Peer:
 
     
     def Request_thread(self, peer_socket, peer_obj: Neighbour_Peer):
+        print('available chunks', peer_obj.available_chunks)
         while peer_obj.Check_alive():
 
             if self.left != 0 and peer_obj.Check_receive_status():
@@ -211,12 +212,12 @@ class Peer:
 
                 stop = True
                 for request in requests:
-                    if self.In_set(request['piece_index']): continue
+                    if self.In_set((request['piece_index'], request['filepath'])): continue
                     stop = False
                     request_message = messParser.construct_request(request['filepath'], request['piece_index'])
                     with peer_obj.queue_send_lock:
                         peer_obj.request_queue.append(request_message)
-                    self.add_to_set(request['piece_index'])
+                    self.add_to_set((request['piece_index'], request['filepath']))
                     
                 # if not stop: print('request for peer with ID:', peer_obj.ID,' was sent') 
 
@@ -314,7 +315,6 @@ class Peer:
                         self.send_all(peer_socket, request)
                         peer_obj.request_queue.remove(request)
                     peer_obj.update_time()
-                    # print('request sent to peer with ID:', peer_obj.ID)
             # time.sleep(0.5)
             # with peer_obj.queue_send_lock:
                 if peer_obj.piece_queue:
@@ -524,7 +524,9 @@ class Peer:
                         # Get payload info
                         chunk_metadata = {key: payload[key] for key in ['filepath', 'piece_index']}
                         have = False
+                        
                         with self.general_update_lock:
+                            print(f"chunk_metadata: {chunk_metadata}")
                             if chunk_metadata in self.chunks_left:
                                 have = True
                                 self.save_chunk_to_local_storage(filepath, piece_index, chunk_data)
@@ -702,6 +704,21 @@ class Peer:
                                 if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
                                     self.chunks_left.append({"filepath": filepath, "piece_index": piece["index"]})
                     
+                    
+                    
+                    self.load_local_storage()
+                    print('----------------------------------------------------')
+                    for file in self.local_storage:
+                        print(file.filepath)
+                    print('----------------------------------------------------')
+                    print(self.chunks_left)
+                    print('----------------------------------------------------')
+                    print(self.chunks_downloaded)
+                    print('----------------------------------------------------')
+                    print(len(self.chunks_downloaded))
+                    print('----------------------------------------------------')
+
+                    self.downloaded = len(self.chunks_downloaded)
                     self.left = len(self.chunks_left)
                     print(f"INFO: Total chunks to download: {self.left}.")
                     return True
@@ -751,6 +768,7 @@ class Peer:
     def save_chunk_to_local_storage(self, filepath, piece_index, chunk_data):
         file = next((f for f in self.local_storage if f.filepath == filepath), None)
         if file:
+            print(f"{file.filepath} save_chunk_to_local_storage")
             expected_hash = file.pieces_list[piece_index]['hash']
             piece_hash = hashlib.sha1(chunk_data).hexdigest()
 
@@ -1084,14 +1102,30 @@ class Peer:
                 # Construct the base file path
                 file_path = os.path.join(file_obj.output_directory, file_obj.filepath)
 
-                # Load chunks from saved files
-                for i in range(len(file_obj.pieces_list)):
-                    piece_path = file_path + f'_{i}'
-                    if os.path.exists(piece_path):
-                        # with open(piece_path, 'rb') as chunk_file:
+                if os.path.exists(file_path):
+                    # Load chunks from saved files
+                    for i in range(len(file_obj.pieces_list)):
+                        piece_path = file_path + f'_{i}'
                         file_obj.verified_pieces_data[i] = str(piece_path)
-                        # os.remove(piece_path)  # Remove the chunk file after loading
-                        print(f"INFO: Loaded chunk {i} of file '{file_obj.filepath}' from '{piece_path}'.")
+                        # Remove payloay if exists in chunk_left
+                        if {"filepath": file_obj.filepath, "piece_index": i} in self.chunks_left:
+                            self.chunks_left.remove({"filepath": file_obj.filepath, "piece_index": i})
+                            self.chunks_downloaded.append({"filepath": file_obj.filepath, "piece_index": i})
+                    print(f"INFO: Loaded file '{file_obj.filepath}' from {file_path}.")
+                else:
+                    # Load chunks from saved pieces
+                    for i in range(len(file_obj.pieces_list)):
+                        piece_path = file_path + f'_{i}'
+
+                        if os.path.exists(piece_path):
+                            file_obj.verified_pieces_data[i] = str(piece_path)
+                            # Remove payloay if exists in chunk_left
+                            if {"filepath": file_obj.filepath, "piece_index": i} in self.chunks_left:
+                                self.chunks_left.remove({"filepath": file_obj.filepath, "piece_index": i})
+                                self.chunks_downloaded.append({"filepath": file_obj.filepath, "piece_index": i})
+                            print(f"INFO: Loaded chunk {i} of file '{file_obj.filepath}' from '{piece_path}'.")
+                        
+
                     # else:
                     #     print(f"WARNING: Chunk file '{piece_path}' not found. Assuming missing chunk.")
                     
@@ -1303,13 +1337,12 @@ class Peer:
         print('The connection to torrent:', self.torrent_file, 'is closed')
 
 
-# port = input('port ')
-# if port == '1122': seeder = True
-# else: seeder = False    
+port = input('port ')
+if port == '1122': seeder = True
+else: seeder = False    
 
-# a = Peer(int(port), 'torrents/postgresql-17.0-1-windows-x64.exe.torrent.json', seeder)
-# a.Main()
-
+a = Peer(int(port), 'torrents/data.torrent.json', seeder)
+a.Main()
 
 
 
