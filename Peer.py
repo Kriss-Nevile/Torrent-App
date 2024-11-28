@@ -20,7 +20,7 @@ from config import timestamped_print as print
 
 
 PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
-OUTPUT_DIR = 'downloadeds' 
+# OUTPUT_DIR = 'downloadeds' 
 
 
 # Currently the peer supports up to 20 neighbouring peers
