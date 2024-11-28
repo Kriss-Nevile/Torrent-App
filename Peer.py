@@ -86,7 +86,7 @@ class Peer:
         #self.have_queue = []
         self.general_update_lock = Lock()
         self.completed = seeder
-        self.max_councurrent_request = 20
+        self.max_councurrent_request = 30
         self.condition = Condition() # this is to halt the accepting socket if the number of socket have reached 
         # the maximum --> might remove this feature in the future
         self.primary_accept_socket = None
@@ -1356,7 +1356,6 @@ class Peer:
     def Main(self):
         print('chunks left:', self.left)
         print('start the peer main thread')
-        input('ready?')
         if self.seeder:
             accept_thread = Thread(target=self.Accepting_request)
             accept_thread.start()

@@ -195,7 +195,7 @@ def Download_rate(neighbour_peer: Neighbour_Peer):
             neighbour_peer.last_time = time.time()
             neighbour_peer.chunks_downloaded = 0
         
-        print('Download rate for peer with ID: ', neighbour_peer.ID, 'is: ', Download_rate, 'MB/s')
+        #print('Download rate for peer with ID: ', neighbour_peer.ID, 'is: ', Download_rate, 'MB/s')
         time.sleep(3) #update every 3 seconds
     
     print('Download rate closed for peer with ID: ', neighbour_peer.ID)
