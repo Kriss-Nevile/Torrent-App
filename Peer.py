@@ -20,7 +20,7 @@ from config import timestamped_print as print
 
 
 PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
-# OUTPUT_DIR = 'downloadeds' 
+OUTPUT_DIR = 'downloadeds' 
 
 
 # Currently the peer supports up to 20 neighbouring peers
@@ -155,6 +155,7 @@ class Peer:
             self.upload_speed = self.uploaded * PIECE_SIZE / ((time.time() - self.previous_time) * (1024 * 1024))
             self.uploaded = 0
             self.previous_time = time.time()
+            return self.upload_speed
 
     
     def Get_Peer_Speed_Info(self):
@@ -208,7 +209,7 @@ class Peer:
     
     def Request_thread(self, peer_socket, peer_obj: Neighbour_Peer):
         while peer_obj.Check_alive():
-
+            counter = 0
             if self.left != 0 and peer_obj.Check_receive_status():
                 length = 0
                 with peer_obj.available_lock:
@@ -224,11 +225,12 @@ class Peer:
                         peer_obj.request_queue.append(request_message)
                     self.add_to_set((request['piece_index'], request['filepath']))
                     
-                # if not stop: print('request for peer with ID:', peer_obj.ID,' was sent') 
-
+                # if not stop and counter > 1: print('request for peer with ID:', peer_obj.ID,' was sent') 
+                #     counter = 0
                 #     time.sleep(0.05 * length) #if all the chunks are already in the set, wait for 5 seconds
                 #     with self.send_track_lock:
                 #         self.send_track.clear()
+            #counter += 1
 
             time.sleep(0.5)
         
@@ -606,7 +608,8 @@ class Peer:
                     print('number of pieces for each peer:', self.count)
                     for peer in self.peer_list:
                         print("available chunks for peer with ID:", peer.ID," ", peer.available_chunks)
-            
+                    print('total execution time:', self.total_execution_time)
+
             message_queue.clear()
             meta_data_list.clear()
 
@@ -1356,6 +1359,7 @@ class Peer:
     def Main(self):
         print('chunks left:', self.left)
         print('start the peer main thread')
+        # input('ready?')
         if self.seeder:
             accept_thread = Thread(target=self.Accepting_request)
             accept_thread.start()
@@ -1383,7 +1387,7 @@ class Peer:
 
 
 # port = input('port ')
-# if port == '1122': seeder = True
+# if port == '1123': seeder = True
 # else: seeder = False    
 
 # a = Peer(int(port), 'torrents/Multi_Test.torrent.json', seeder)

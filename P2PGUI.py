@@ -258,9 +258,9 @@ class TorrentGUI:
         for index in torrent_index:
             torrent = self.torrent_array[index]
 
-            if torrent in self.torrent_peer:  #if it is in torrent peer means it is paused
+            if torrent in self.torrent_peer and torrent not in self.active_torrent:  #if it is in torrent peer means it is paused
                 peer = self.torrent_peer[torrent]
-                peer.Resume()
+                # peer.Resume()
 
             peer_type = self.ask_peer_type(torrent)
 
@@ -465,7 +465,6 @@ class TorrentGUI:
             if peer:
                 peer.Exit_torrent()  #Exit for this peer
                 del self.torrent_peer[torrent_path]
-                self.inactive_torrent.append(torrent_path)  #add back to available torrents
                 self.log(f"Torrent paused: {torrent_path}.")
             # else:
             #     self.log(f"Torrent {torrent_path} is not active. Remove from torrent list.")
