@@ -20,7 +20,7 @@ from config import timestamped_print as print
 
 
 PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
-# OUTPUT_DIR = 'downloadeds' 
+OUTPUT_DIR = 'downloadeds' 
 
 
 # Currently the peer supports up to 20 neighbouring peers
@@ -85,13 +85,13 @@ class Peer:
         # self.have_lock = Lock()
         #self.have_queue = []
         self.general_update_lock = Lock()
-        self.completed = False
+        self.completed = seeder
         self.max_councurrent_request = 20
         self.condition = Condition() # this is to halt the accepting socket if the number of socket have reached 
         # the maximum --> might remove this feature in the future
         self.primary_accept_socket = None
         self.alive = True
-        self.peer_id = self.peer_id = datetime.now().strftime("%H%M%S%f") + str(random.randint(10000000, 99999999)) #generate a unique peer id
+        self.peer_id = datetime.now().strftime("%H%M%S%f") + str(random.randint(10000000, 99999999)) #generate a unique peer id
         self.info_hash = None #20 bytes
         self.max_unchoked_peers = 4 #doesnt include the random one
         self.peer_list = []
@@ -116,7 +116,7 @@ class Peer:
         self.local_storage = []
         self.start_time = time.time() #track total execution time
         self.total_execution_time = 0
-
+        # self.is_paused = False
         # Torrent data:
         self.piece_length = PIECE_SIZE  # default
         #self.URL = TRACKER_URL             # default
@@ -158,14 +158,18 @@ class Peer:
 
     
     def Get_Peer_Speed_Info(self):
-        with self.stats_lock:
-            current_upload_speed = self.uploaded * PIECE_SIZE / ((time.time() - self.previous_time) * (1024 * 1024))
-            print(f"General Upload speed: {current_upload_speed:.2f} MB/s")
+        download_percent = 0
+        download_array = []
+        current_upload_speed = self.Upload_rate()
+            # print(f"General Upload speed: {current_upload_speed:.2f} MB/s")
         with self.general_update_lock:
             for peer in self.peer_list:
                 Download_rate = peer.current_download_rate()
-                print(f"Downloaded speed for peer with ID {peer.ID}: {Download_rate:.2f} MB/s")
-
+                download_array.append((peer.ID, Download_rate))
+                # print(f"Downloaded speed for peer with ID {peer.ID}: {Download_rate:.2f} MB/s")
+            download_percent = (self.downloaded / (self.downloaded + self.left)) * 100
+        
+        return current_upload_speed, download_percent, download_array
 
     #if a peer has available chunks, send an interested message
     #if a peer has no available chunks, send a not interested message
@@ -338,8 +342,6 @@ class Peer:
             time.sleep(1)
         
         peer_socket.close()
-        with self.general_update_lock:
-            self.peer_list.remove(peer_obj)
             # if peer_obj in self.unchoked_peer:
             #     self.unchoked_peer.remove(peer_obj)
             #     filtered = [peer for peer in self.peer_list if peer not in self.unchoked_peer]
@@ -349,6 +351,9 @@ class Peer:
         keep_alive_thread.join()    
         request_thread.join()
         download_speed_thread.join()
+
+        with self.general_update_lock:
+            self.peer_list.remove(peer_obj)
 
 
         print("SEND: Cleared peer object and Send closed for peer with ID:", peer_obj.ID,'\n')
@@ -679,6 +684,8 @@ class Peer:
                             for piece in pieces:
                                 if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
                                     self.chunks_downloaded.append({"filepath": filepath, "piece_index": piece["index"]})
+                            
+                    self.downloaded = len(self.chunks_downloaded)
             except Exception as e:
                 print(f"ERRROR: Seeder failed to load torrent file: {e}")
                 return False
@@ -1025,6 +1032,7 @@ class Peer:
                 else:
                     print("Failed to connect to tracker", response)
             else:
+                print('already have the file')
                 params = {
                 "info_hash": self.info_hash,
                 "ip": self.IP,  # Your IP address
@@ -1063,6 +1071,7 @@ class Peer:
 
             with self.general_update_lock:
                 self.peer_list = peers
+                print('Got list,', self.peer_list)
                 self.unchoked_peer = self.peer_list[:min(self.max_unchoked_peers + 1, len(self.peer_list))] 
         
         except json.JSONDecodeError:
@@ -1151,6 +1160,7 @@ class Peer:
 
     # May change in the future
     def connect_to_peers(self):
+        print("Connecting to peers...", self.peer_list)
         threads = []
         self.start_time = time.time() #the start time is when the client starts to connect to the peers
         for instance in reversed(self.peer_list):
@@ -1288,6 +1298,32 @@ class Peer:
             print("Handshake failed")
             return None
     
+    # def Pause(self):
+    #     with self.general_update_lock:
+    #         self.is_paused = True
+    #         for peer in self.peer_list:
+    #             peer.Turn_off()
+        
+    #     while True:
+    #         with self.general_update_lock:
+    #             if self.peer_list: time.sleep(1)  #wait for all the threads to close
+    #             else: break
+        
+    #     print('The torrent is paused')
+
+    # def Resume(self):
+    #     good = False
+    #     with self.general_update_lock:
+    #         if self.is_paused:
+    #             self.is_paused = False
+    #             good = True
+    #         else:
+    #             print('The torrent is not paused')
+    #     if good:
+    #         self.Connect_torrent()  #reconnnect all
+    #         self.connect_to_peers()
+        
+
     def Exit_torrent(self):
         if self.completed: print('Exit the torrent gracefully')
         else: print('Exit the torrent without completing the download')
@@ -1299,7 +1335,7 @@ class Peer:
             
             self.Turn_off()
             #all it's threaa will then turned off automatically
-
+        #send a stopped event to the tracker
 
         params = {
                 "info_hash": self.info_hash,
@@ -1327,8 +1363,8 @@ class Peer:
             tit_for_tat = Thread(target=self.Tit_for_tat)
             tit_for_tat.start()
             self.Connect_torrent()  # a seeder doesnt need to connect to other peers, i'll also send a completed event to the tracker
-            input('turn off?')
-            self.Exit_torrent()
+            #input('turn off?')
+            # self.Exit_torrent()
             accept_thread.join()
             tit_for_tat.join()
         else:
@@ -1341,20 +1377,18 @@ class Peer:
                 self.connect_to_peers()
             else:
                 print('No peer available')
-            input('turn off?')
-            self.Exit_torrent()
             accept_thread.join()
             tit_for_tat.join()
     
         print('The connection to torrent:', self.torrent_file, 'is closed')
 
 
-port = input('port ')
-if port == '1122': seeder = True
-else: seeder = False    
+# port = input('port ')
+# if port == '1122': seeder = True
+# else: seeder = False    
 
-a = Peer(int(port), 'torrents/Multi_Test.torrent.json', seeder)
-a.Main()
+# a = Peer(int(port), 'torrents/Multi_Test.torrent.json', seeder)
+# a.Main()
 
 
 

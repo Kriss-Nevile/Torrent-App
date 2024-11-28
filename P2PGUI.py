@@ -1,15 +1,13 @@
 import threading
-import select
 from Peer import Peer
 import tkinter as tk
 import os
 import File2Torrent
 import random
 import config
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import customtkinter as ctk
-from PIL import Image
-import pywinstyles
+import time
 
 # Assuming File2Torrent, Peer, config, and other components are implemented elsewhere.
 used_ports = set()
@@ -17,6 +15,61 @@ used_ports.add(1121)
 def wrap_text(text, width):
     """Wrap text at a specified character width."""
     return '\n'.join([text[i:i+width] for i in range(0, len(text), width)])
+
+class CustomInputDialog(ctk.CTkToplevel):
+    def __init__(self, master, text="Enter your input:", title="Input"):
+        super().__init__(master)
+
+        # Configure dialog properties
+        self.geometry("400x150")
+        self.title(title)
+        self.resizable(False, False)
+        self.lift()
+        self.attributes("-topmost", True)
+        self.focus_force()
+
+        # Variable to store user input
+        self.input_var = ctk.StringVar()
+
+        # Add label for instructions
+        ctk.CTkLabel(self, text=text, wraplength=350).pack(pady=10)
+
+        # Entry field for input
+        self.entry = ctk.CTkEntry(self, textvariable=self.input_var)
+        self.entry.pack(pady=10)
+        self.entry.focus()
+
+        # Buttons
+        button_frame = ctk.CTkFrame(self)
+        button_frame.pack(pady=10)
+
+        self.submit_button = ctk.CTkButton(
+            button_frame, text="Submit", command=self._on_submit
+        )
+        self.submit_button.pack(side="left", padx=5)
+
+        self.cancel_button = ctk.CTkButton(
+            button_frame, text="Cancel", command=self._on_cancel, hover_color="red"
+        )
+        self.cancel_button.pack(side="left", padx=5)
+
+        # To store result
+        self.result = None
+
+    def _on_submit(self):
+        """Handle the submit action."""
+        self.result = self.input_var.get()
+        self.destroy()
+
+    def _on_cancel(self):
+        """Handle the cancel action."""
+        self.result = None
+        self.destroy()
+
+    def get_input(self):
+        """Wait for the dialog window to close and return the input."""
+        self.wait_window()
+        return self.result
 
 def rgb_to_hex(rgb):
     return '#%02x%02x%02x' % rgb
@@ -50,6 +103,8 @@ class TorrentGUI:
     
 
         self.torrent_array = []  # Store torrent paths
+        self.active_torrent = [] # Store torrent in action
+        self.inactive_torrent = [] # Store torrent paused
         self.torrent_peer = {}   # Store torrent-peer mapping
 
         # Frame to hold the buttons horizontally
@@ -69,9 +124,10 @@ class TorrentGUI:
         ctk.CTkButton(button_frame_row1, text="Connect", command=self.connect_torrent, **button_config).pack(side="left", padx=5)
         ctk.CTkButton(button_frame_row1, text="Config", command=self.configure, **button_config).pack(side="left", padx=5)
         # Add buttons to the second row
-        ctk.CTkButton(button_frame_row2, text="Exit Torrent", command=self.exit_torrent, **button_config).pack(side="left", padx=5)
+        ctk.CTkButton(button_frame_row2, text="Remove Torrent", command=self.exit_torrent, **button_config).pack(side="left", padx=5)
         ctk.CTkButton(button_frame_row2, text="Show Statistics", command=self.show_statistics, **button_config).pack(side="left", padx=5)
         ctk.CTkButton(button_frame_row2, text="Clear Screen", command=self.clear_screen, **button_config).pack(side="left", padx=5)
+        ctk.CTkButton(button_frame_row2, text="Pause Torrent", command=self.stop_torrent, **button_config).pack(side="left", padx=5)
         ctk.CTkButton(button_frame_row2, text="Exit Program", command=self.exit_program, **button_config, hover_color="red").pack(side="left", padx=5)
 
         # Output area
@@ -98,6 +154,8 @@ class TorrentGUI:
         dialog.title("Peer Type")
         dialog.geometry("400x150")
         dialog.resizable(False, False)
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: set_peer_type(None))
 
         label = ctk.CTkLabel(dialog, text=wrap_text(f"Is this a seeder for torrent {torrent_name}? (Only choose Yes if you already have the file)", 50))
         label.pack(pady=20)
@@ -175,7 +233,6 @@ class TorrentGUI:
         """Select a torrent file."""
         path = filedialog.askopenfilename(title="Select Torrent File", filetypes=[("Torrent Files", "*.json")])
         if not path:
-            self.log("No torrent file selected.")
             return
         if os.path.exists(path):
             #check if path already exists in the array
@@ -184,22 +241,27 @@ class TorrentGUI:
                 return
             
             self.torrent_array.append(path)
+            self.inactive_torrent.append(path)
             self.log(f"Torrent selected: {path}")
         else:
             self.log("File does not exist.")
 
     def connect_torrent(self):
         """Connect to a torrent."""
-        if not self.torrent_array:
+        if not self.inactive_torrent:
             self.log("No torrents available. Please select one first.")
             return
 
-        torrent_index = self.select_from_list(self.torrent_array, "Select a Torrent")
+        torrent_index = self.select_from_list(self.inactive_torrent, "Select a Torrent")
         if not torrent_index:
-            self.log("No torrent selected.")
             return
         for index in torrent_index:
             torrent = self.torrent_array[index]
+
+            if torrent in self.torrent_peer:  #if it is in torrent peer means it is paused
+                peer = self.torrent_peer[torrent]
+                peer.Resume()
+
             peer_type = self.ask_peer_type(torrent)
 
             # Validate the response
@@ -217,69 +279,167 @@ class TorrentGUI:
                 peer = Peer(port, torrent, False)
 
         # Store the peer and start its thread
-            self.torrent_peer[torrent] = peer
+            self.torrent_peer[torrent] = peer  #add to peer - torrent mapping
+            self.active_torrent.append(torrent)  #add to active torrents
+            self.inactive_torrent.remove(torrent)  #remove from available torrents
             threading.Thread(target=peer.Main).start()
             self.log(f"Connected to torrent: {torrent}")
 
     def configure(self):
         """View or modify configurations."""
         config_window = ctk.CTkToplevel(self.root)
+        config_window.geometry("400x200")
         config_window.title("Configurations")
+        config_window.resizable(False, False)
+        config_window.attributes("-topmost", True)  # Keep the window on top
+        config_window.focus_force()
 
-        # Display current configurations
+        # Variables to dynamically update labels
+        PIECE_SIZE_var = tk.StringVar()
+        OUTPUT_DIR_var = tk.StringVar()
+        TRACKER_URL_var = tk.StringVar()
+
+        # Load current configurations
         PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
-        tk.Label(config_window, text=f"PIECE_SIZE: {PIECE_SIZE}").pack()
-        tk.Label(config_window, text=f"OUTPUT_DIR: {OUTPUT_DIR}").pack()
-        tk.Label(config_window, text=f"TRACKER_URL: {TRACKER_URL}").pack()
+        PIECE_SIZE_var.set(f"PIECE_SIZE: {PIECE_SIZE} (bytes)")
+        OUTPUT_DIR_var.set(f"OUTPUT_DIR: {OUTPUT_DIR}")
+        TRACKER_URL_var.set(f"TRACKER_URL: {wrap_text(TRACKER_URL, 52)}")
 
-        def update_config(option, label):
-            value = tk.simpledialog.askstring("Update Config", f"Enter new value for {label}:")
+        # Display labels using StringVar
+        ctk.CTkLabel(config_window, textvariable=PIECE_SIZE_var).pack()
+        ctk.CTkLabel(config_window, textvariable=OUTPUT_DIR_var).pack()
+        ctk.CTkLabel(config_window, textvariable=TRACKER_URL_var).pack()
+
+        def update_config(option, label_var, label):
+            value = CustomInputDialog(self.root, text=f"Enter new value for {label}:", title="Update Config").get_input()
             if value:
+                # Check if value is a number string
+                if option == 1 and not value.isdigit():
+                    self.log("Invalid value for PIECE_SIZE. It should be a number.")
+                    return
+                # Write to configuration
                 config.write_config(option, value)
                 self.log(f"Updated {label} to {value}")
 
-        tk.Button(config_window, text="Update PIECE_SIZE", command=lambda: update_config(1, "PIECE_SIZE")).pack(pady=3)
-        tk.Button(config_window, text="Update OUTPUT_DIR", command=lambda: update_config(2, "OUTPUT_DIR")).pack(pady=3)
-        tk.Button(config_window, text="Update TRACKER_URL", command=lambda: update_config(3, "TRACKER_URL")).pack(pady=3)
+                # Re-read the updated configuration
+                PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
+                if option == 1:
+                    label_var.set(f"PIECE_SIZE: {PIECE_SIZE} (bytes)")
+                elif option == 2:
+                    label_var.set(f"OUTPUT_DIR: {OUTPUT_DIR}")
+                elif option == 3:
+                    label_var.set(f"TRACKER_URL: {wrap_text(TRACKER_URL, 52)}")
+
+                # Force UI update
+                config_window.update_idletasks()
+
+        ctk.CTkButton(config_window, text="Update PIECE_SIZE", command=lambda: update_config(1, PIECE_SIZE_var, "PIECE_SIZE")).pack(pady=3)
+        ctk.CTkButton(config_window, text="Update OUTPUT_DIR", command=lambda: update_config(2, OUTPUT_DIR_var, "OUTPUT_DIR")).pack(pady=3)
+        ctk.CTkButton(config_window, text="Update TRACKER_URL", command=lambda: update_config(3, TRACKER_URL_var, "TRACKER_URL")).pack(pady=3)
 
     def exit_torrent(self):
         """Stop a torrent."""
+        # active_torrents = self.active_torrent#[torrent for torrent in self.torrent_array if torrent in self.torrent_peer]
+        #list out only active torrents
+
         if not self.torrent_array:
             self.log("No torrents available to stop.")
             return
 
-        torrent_index = self.select_from_list(self.torrent_array, "Select a Torrent to Stop")
+        torrent_index = self.select_from_list(self.torrent_array, "Select a Torrent to Stop") #allows us to exit non active torrents
         if torrent_index is None:
-            self.log("No torrent selected.")
             return
 
-        for torrent in torrent_index:
-            torrent_path = self.torrent_array[torrent]
+        for index in torrent_index:
+            torrent_path = self.torrent_array[index]
+            self.torrent_array.remove(torrent_path)  #remove from available torrents
             peer = self.torrent_peer.get(torrent_path)
             if peer:
-                peer.Turn_off()
+                peer.Exit_torrent()  #Exit for this peer
                 del self.torrent_peer[torrent_path]
-                self.log(f"Torrent stopped: {torrent_path} removed from torrent list.")
+                self.active_torrent.remove(torrent_path)  #remove from active torrents
+                self.log(f"{torrent_path} REMOVED from torrent list.")
             else:
                 self.log(f"Torrent {torrent_path} is not active. Remove from torrent list.")
+                self.inactive_torrent.remove(torrent_path)  #remove from inactive torrents
 
     def show_statistics(self):
         """Show statistics for a torrent."""
-        if not self.torrent_array:
+        active_torrents = self.active_torrent
+
+        if not active_torrents:
             self.log("No torrents available.")
             return
 
-        torrent_index = self.select_from_list(self.torrent_array, "Select a Torrent for Statistics")
+        torrent_index = self.select_from_list(active_torrents, "Select a Torrent for Statistics")
         if torrent_index is None:
-            self.log("No torrent selected.")
             return
 
-        torrent = self.torrent_array[torrent_index]
-        peer = self.torrent_peer.get(torrent)
-        if peer:
-            peer.Get_Peer_Speed_Info()
-        else:
-            self.log("Torrent is not active.")
+        selected_peers = [self.torrent_peer[self.torrent_array[index]] for index in torrent_index if self.torrent_array[index] in self.torrent_peer]
+
+        if not selected_peers:
+            return
+
+        # Create a new window to display statistics
+        stats_window = ctk.CTkToplevel(self.root)
+        stats_window.title("Torrent Statistics")
+        stats_window.geometry("600x400")
+        stats_window.attributes("-topmost", True)
+        stats_window.focus_force()
+
+        # Frame to hold the statistics labels
+        stats_frame = ctk.CTkFrame(stats_window)
+        stats_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Dictionary to hold the labels for each peer
+        peer_labels = {}
+
+        for peer in selected_peers:
+            label = ctk.CTkLabel(stats_frame, text=f"Peer {peer.peer_id}: Initializing...")
+            label.pack(pady=5)
+            peer_labels[peer] = label
+        
+        self.update_thread_running = True
+
+        def update_statistics():
+            """Update the statistics with a nicely formatted display."""
+            while self.update_thread_running:
+                for peer in selected_peers:
+                    # Get statistics for the peer
+                    current_upload_speed, download_percent, download_array = peer.Get_Peer_Speed_Info()
+
+                    # Format the output
+                    formatted_stats = (
+                        f"Peer {peer.peer_id}\n"
+                        f"  Upload Speed: {current_upload_speed:.2f} MB/s\n"
+                        f"  Download Progress: {download_percent:.2f}%\n"
+                        f"  Downloads from Peers:\n"
+
+                    )
+                    if download_array:
+                        for peer_id, download_rate in download_array:
+                            formatted_stats += f"    - Peer {peer_id}: {download_rate:.2f} MB/s\n"
+                    else:
+                        formatted_stats += "    No connected peers\n"
+
+                    formatted_stats += f"---------------------------------------------------------" #separator
+
+                    # Update the label with the formatted statistics
+                    peer_labels[peer].configure(text=formatted_stats)
+
+                time.sleep(3)
+
+        # Start a thread to update the statistics every 3 seconds
+        stats_thread = threading.Thread(target=update_statistics, daemon=True)
+        stats_thread.start()
+
+        def close_stats_window():
+            self.update_thread_running = False
+            stats_window.destroy()
+
+        # Cancel button to close the statistics window
+        cancel_button = ctk.CTkButton(stats_window, text="Cancel", command=close_stats_window, hover_color="red")
+        cancel_button.pack(pady=10)
 
     def clear_screen(self):
         """Clear the output area."""
@@ -287,11 +447,34 @@ class TorrentGUI:
         self.output.delete("1.0", "end")
         self.output.configure(state="disabled")
 
+    def stop_torrent(self):
+        """Stop a torrent."""
+        active_torrents = self.active_torrent
+
+        if not active_torrents:
+            self.log("No torrents available to stop.")
+            return
+
+        torrent_index = self.select_from_list(active_torrents, "Select a Torrent to Stop")
+        if torrent_index is None:
+            return
+
+        for index in torrent_index:
+            torrent_path = self.torrent_array[index]
+            peer = self.torrent_peer.get(torrent_path)
+            if peer:
+                peer.Exit_torrent()  #Exit for this peer
+                del self.torrent_peer[torrent_path]
+                self.inactive_torrent.append(torrent_path)  #add back to available torrents
+                self.log(f"Torrent paused: {torrent_path}.")
+            # else:
+            #     self.log(f"Torrent {torrent_path} is not active. Remove from torrent list.")
+
 
     def exit_program(self):
         """Exit the application."""
         for torrent, peer in self.torrent_peer.items():
-            peer.Turn_off()
+            peer.Exit_torrent()
         self.root.destroy()
 
     def select_from_list(self, options, title):
@@ -361,6 +544,8 @@ class TorrentGUI:
         def cancel():
             selected.clear()
             selection_window.destroy()
+
+        selection_window.protocol("WM_DELETE_WINDOW", cancel)
 
         # Button frame at the bottom
         button_frame = ctk.CTkFrame(selection_window, fg_color="transparent")
