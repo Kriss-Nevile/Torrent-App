@@ -465,6 +465,7 @@ class TorrentGUI:
             if peer:
                 peer.Exit_torrent()  #Exit for this peer
                 del self.torrent_peer[torrent_path]
+                self.active_torrent.remove(torrent_path)  #remove from active torrents
                 self.inactive_torrent.append(torrent_path)  #add back to available torrents
                 self.log(f"Torrent paused: {torrent_path}.")
             # else:
