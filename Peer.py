@@ -14,18 +14,22 @@ import os
 import hashlib
 
 
+
+
 # Import Configuration
 import config
 from config import timestamped_print as print
 
 
 PIECE_SIZE, OUTPUT_DIR, TRACKER_URL = config.read_config()
-OUTPUT_DIR = 'downloadeds' 
 
 
 # Currently the peer supports up to 20 neighbouring peers
 class File:
-    def __init__(self, filepath, pieces_list, output_directory = OUTPUT_DIR):
+    def __init__(self, filepath, pieces_list, output_directory = None):
+        if output_directory is None:
+            output_directory = OUTPUT_DIR
+        # print('OUTPUT_DIR:', output_directory)
         self.filepath = filepath
         self.pieces_list = pieces_list 
         '''
@@ -67,7 +71,18 @@ class File:
 
 class Peer:
 
-    def __init__(self, port, torrent_file="", seeder=False):
+    def __init__(self, port, torrent_file="", seeder=False, out_dir = None):
+        # choice = input('client?')
+        # if not choice:
+        #     pass
+        # else:
+        #     OUTPUT_DIR = choice
+        # print('OUTPUT_DIR PEER:', OUTPUT_DIR)
+
+        # global OUTPUT_DIR
+        # if out_dir is not None:
+        #     OUTPUT_DIR = out_dir
+
         #self.timer_stop = False   deprecated, I dont even remember what this was for
         self.torrent_file = torrent_file
         self.seeder = seeder
@@ -86,7 +101,7 @@ class Peer:
         #self.have_queue = []
         self.general_update_lock = Lock()
         self.completed = seeder
-        self.max_councurrent_request = 30
+        self.max_councurrent_request = 20
         self.condition = Condition() # this is to halt the accepting socket if the number of socket have reached 
         # the maximum --> might remove this feature in the future
         self.primary_accept_socket = None
@@ -386,16 +401,17 @@ class Peer:
                     chunk_data = None
                     if piece_path is not None:
                         piece_path = os.path.join(file_obj.output_directory, piece_path)
+                        print('piece path'  , piece_path)
                         if os.path.exists(piece_path):
                             with open(piece_path, 'rb') as chunk_file:
                                 chunk_data = chunk_file.read()
 
-                    if chunk_data is None: pass
-                        #print(f"INFO: Chunk for file '{filepath}', index {piece_index} not yet verified in local storage from")
+                    if chunk_data is None: 
+                        pass #print(f"INFO: Chunk for file '{filepath}', index {piece_index} not yet verified in local storage from")
                 else:
-                    print(f"ERROR: Invalid piece index {piece_index} for file '{filepath}' in local storage.")
-            else: pass
-                #print(f"INFO: File '{filepath}' not found in local storage. Reading directly from file.")
+                    pass #print(f"ERROR: Invalid piece index {piece_index} for file '{filepath}' in local storage.")
+            else: 
+                pass #print(f"INFO: File '{filepath}' not found in local storage. Reading directly from file.")
 
             # If not found or verified in local storage, read directly from file
             if chunk_data is None:
@@ -591,7 +607,7 @@ class Peer:
 
                     params = {
                     "info_hash": self.info_hash,
-                    "ip": "127.0.0.1",  # Your IP address
+                    "ip": self.IP,  # Your IP address
                     "peer_id": self.peer_id,  #Assign a unique peer ID
                     "port": self.port,  # Port your client listens on for incoming peer connections
                     "downloaded": self.downloaded,
@@ -666,7 +682,7 @@ class Peer:
         
         if self.seeder:
             try:
-
+                    #if it starts out as a seeder, it doesnt include any file in local storage
                     if len(torrent_data['info']['files']) == 1 and base_name == torrent_data['info']['files'][0]['path'][0]:
                         # Single-file torrent
                         file_info = torrent_data["info"]["files"][0]
@@ -683,7 +699,7 @@ class Peer:
                             filepath = os.path.join(base_name, *file_info["path"])
                             pieces = file_info["pieces"]
 
-                            # Add payload: {"filepath": path/name, "piece_index": } to chunk_left
+                            # Add payload: {"filepath": path/name, "piece_index": } to chunk_downloaded
                             for piece in pieces:
                                 if {"filepath": filepath, "piece_index": piece["index"]} not in self.chunks_left:
                                     self.chunks_downloaded.append({"filepath": filepath, "piece_index": piece["index"]})
@@ -726,9 +742,9 @@ class Peer:
                     for file in self.local_storage:
                         print(file.filepath)
                     print('----------------------------------------------------')
-                    print(self.chunks_left)
+                    #print(self.chunks_left)
                     print('----------------------------------------------------')
-                    print(self.chunks_downloaded)
+                    #print(self.chunks_downloaded)
                     print('----------------------------------------------------')
                     print(len(self.chunks_downloaded))
                     print('----------------------------------------------------')
@@ -746,8 +762,11 @@ class Peer:
     def read_chunk(self, filepath, piece_index):
         try:
             # Check if the file exists
+            #this uses the system diredctly instead of file specific
+            filepath = os.path.join(OUTPUT_DIR, filepath)
+
             if not os.path.exists(filepath):
-                print(f"ERROR: File {filepath} does not exist.")
+                print(f"ERROR: File {filepath} does not exist. Male sure the file is in the correct output directory.")
                 return None
             
             # Get the size of the file
@@ -1128,6 +1147,7 @@ class Peer:
                             self.chunks_left.remove({"filepath": file_obj.filepath, "piece_index": i})
                             self.chunks_downloaded.append({"filepath": file_obj.filepath, "piece_index": i})
                     print(f"INFO: Loaded file '{file_obj.filepath}' from {file_path}.")
+                    self.completed = True
                 else:
                     # Load chunks from saved pieces
                     for i in range(len(file_obj.pieces_list)):
@@ -1352,14 +1372,18 @@ class Peer:
                 "event": "stopped"
                 }
         requests.get(self.URL, params=params)
-        
+
+
+
+
 
 
     
     def Main(self):
-        print('chunks left:', self.left)
-        print('start the peer main thread')
-        # input('ready?')
+        # global debug
+        # print('chunks left:', self.left)
+        # print('start the peer main thread')
+        # if not debug: input('ready?')
         if self.seeder:
             accept_thread = Thread(target=self.Accepting_request)
             accept_thread.start()
@@ -1386,13 +1410,26 @@ class Peer:
         print('The connection to torrent:', self.torrent_file, 'is closed')
 
 
-# port = input('port ')
-# if port == '1123': seeder = True
-# else: seeder = False    
 
-# a = Peer(int(port), 'torrents/Multi_Test.torrent.json', seeder)
-# a.Main()
+# debug = True
 
+# option1 = 'torrents/postgresql-17.0-1-windows-x64.exe.torrent.json'
+# option2 = 'torrents/Multi_Test.torrent.json'
+
+# if not debug: 
+#     directory = None
+#     seeder = False
+#     port = random.randint(1000, 65000)
+
+#     choice = input('SEEDER?')
+#     if choice == 'y': 
+#         seeder = True
+#     else: 
+#         seeder = False    
+#         directory = choice
+
+#     a = Peer(int(port),option1,seeder, directory)
+#     a.Main()
 
 
 

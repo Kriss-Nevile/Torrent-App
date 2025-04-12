@@ -9,6 +9,11 @@ from tkinter import filedialog
 import customtkinter as ctk
 import time
 
+
+debug = False
+
+
+
 # Assuming File2Torrent, Peer, config, and other components are implemented elsewhere.
 used_ports = set()
 used_ports.add(1121)
@@ -86,8 +91,17 @@ def get_unique_port():
 
 class TorrentGUI:
     def __init__(self, root):
-        self.width = 1000
+        self.width = 800
         self.height = 600
+        self.output_dir = None
+
+
+        # if debug:
+        #     path = input("Enter the output directory: ")
+        #     if path:
+        #         self.output_dir = path
+
+
         self.root = root
         self.root.title("Torrent Client GUI")
         self.root.geometry(f"{self.width}x{self.height}")  # Optional: Adjust window size
@@ -255,8 +269,8 @@ class TorrentGUI:
         torrent_index = self.select_from_list(self.inactive_torrent, "Select a Torrent")
         if not torrent_index:
             return
-        for index in torrent_index:
-            torrent = self.torrent_array[index]
+        for torrent in torrent_index:
+
 
             # if torrent in self.torrent_peer and torrent not in self.active_torrent:  #if it is in torrent peer means it is paused
             #     peer = self.torrent_peer[torrent]
@@ -274,9 +288,9 @@ class TorrentGUI:
             
             # Determine the peer type
             if peer_type == 'yes':
-                peer = Peer(port, torrent, True)
+                peer = Peer(port, torrent, True, self.output_dir)
             else:
-                peer = Peer(port, torrent, False)
+                peer = Peer(port, torrent, False, self.output_dir)
 
         # Store the peer and start its thread
             self.torrent_peer[torrent] = peer  #add to peer - torrent mapping
@@ -350,8 +364,7 @@ class TorrentGUI:
         if torrent_index is None:
             return
 
-        for index in torrent_index:
-            torrent_path = self.torrent_array[index]
+        for torrent_path in torrent_index:
             self.torrent_array.remove(torrent_path)  #remove from available torrents
             peer = self.torrent_peer.get(torrent_path)
             if peer:
@@ -375,7 +388,7 @@ class TorrentGUI:
         if torrent_index is None:
             return
 
-        selected_peers = [self.torrent_peer[self.torrent_array[index]] for index in torrent_index if self.torrent_array[index] in self.torrent_peer]
+        selected_peers = [self.torrent_peer[name] for name in torrent_index]  
 
         if not selected_peers:
             return
@@ -459,8 +472,7 @@ class TorrentGUI:
         if torrent_index is None:
             return
 
-        for index in torrent_index:
-            torrent_path = self.torrent_array[index]
+        for torrent_path in torrent_index:
             peer = self.torrent_peer.get(torrent_path)
             if peer:
                 peer.Exit_torrent()  #Exit for this peer
@@ -531,10 +543,10 @@ class TorrentGUI:
         canvas.bind("<Configure>", on_canvas_resize)
 
         # Add checkboxes to the scrollable frame
-        for i, option in enumerate(options):
+        for option in options:
             var = ctk.IntVar()
             checkbox = ctk.CTkCheckBox(
-                scrollable_frame, text=wrap_text(option, 60), variable=var, command=lambda v=i: toggle_selection(v)
+                scrollable_frame, text=wrap_text(option, 60), variable=var, command=lambda v=option: toggle_selection(v)
             )
             checkbox.pack(anchor="w", pady=(5, 0), padx=(10, 0))
 
